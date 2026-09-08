@@ -1,7 +1,87 @@
-# Temporary target-only validation tools
+# Temporary MS1 validation tools
 
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
+
+## Native 192 experiment (single NPU)
+
+`probe_native192.py` tests the installed `sgl_kernel_npu` fused kernel with real
+192-element blocks. `native192_probe_ops.py` contains three small compiler probes.
+Neither file is imported by SGLang. The tool does not modify the installed host
+function, install packages, change compiler defaults, start distributed workers,
+or load a model. Its baseline is the agreed Triton-Ascend **3.2.2** image
+(`triton.__version__` may correctly report **3.2.0**).
+
+In the existing container, use the same initialized CANN/ATB environment as the
+working target-only service. Select an available logical NPU; if your target
+service occupies the whole machine, stop your service first. From the checkout:
+
+```bash
+cd /home/tyj/glm52/sglang
+python3 devtools/glm52_ms1/probe_native192.py
+```
+
+The default is logical NPU 0. Use `--device 1` (or another available index) to
+change it. These are indices in the process's visible device list. The first
+run includes JIT compilation and can take several minutes. No second machine is
+needed. Results are saved automatically under
+`/home/tyj/glm52-ms1/evidence/native192-<UTC-time>-<pid>/`, outside Git.
+
+The first command runs these checks in order and stops at the first failure:
+
+1. An existing **128-dimensional public-host call** as an environment control.
+2. Actual-length 192 load/store, reshape/reduction, and 96+96 slice/rotation.
+3. The installed full fusion, with `Q_BLOCK_SIZE=KV_BLOCK_SIZE=192` and the
+   original grid formula. It uses BF16 Q/K/V and norm weights, FP32 sin/cos,
+   full NeoX RoPE, no bias, and epsilon `1e-5`. Nine token/head combinations,
+   a guaranteed second row-loop iteration, zero and near-zero input are checked.
+
+The script calls the underlying kernel directly for the experiment. The public
+host's current power-of-two assertion stays intact. Q/K are compared with an
+independent CPU FP32 formula without intermediate BF16 rounding; V must be
+bitwise identical. The diagnostic absolute tolerance `5e-2` comes from the
+existing kernel's test, **not** a new GLM model-quality acceptance threshold.
+Per-output error metrics are saved for review.
+
+After the first command passes, optionally run graph validation and diagnostic
+timing. This reruns the eager checks before capturing one `[8, 4, 192]` case:
+
+```bash
+python3 devtools/glm52_ms1/probe_native192.py --graph --benchmark
+```
+
+Graph checks use one side stream, stable tensor addresses, and two changed-input
+replays, poisoning output buffers before each replay. Capture uses
+`auto_dispatch_capture=True`, as in the current SGLang NPU graph backend. Event
+timings exclude JIT/capture, but include gaps on the measured stream; they are
+diagnostic measurements, not an end-to-end speedup or performance acceptance.
+
+Result interpretation:
+
+- `EAGER_DIAGNOSTIC_PASS_GRAPH_NOT_RUN`: eager checks passed; graph was not run.
+- `EAGER_AND_GRAPH_DIAGNOSTIC_PASS`: eager plus this single-operator graph passed.
+- `FAILED`: inspect `active_stage`, the metrics, and `traceback.txt`.
+- `RUNNING` left behind after a crash/interruption: incomplete evidence, never a pass.
+
+Return `report.json`; on failure also return `traceback.txt` and the terminal
+error. `run.log`, the installed kernel source, and the actual `arange` source are
+saved alongside them. Versions, selected-device properties, compiler metadata
+and source hashes identify what actually ran. A source different from the local
+audit is recorded, not mislabeled as the audited commit. No automatic fallback
+to 2x128 is performed: first identify whether a failure is environmental,
+compiler-related, numerical, or specific to graph execution.
+
+Local tool tests (CPU PyTorch; no Triton/NPU installation required):
+
+```bash
+python3 devtools/glm52_ms1/test_probe_native192.py -v
+```
+
+These tests do not count as NPU evidence. This experiment does not establish
+SGLang DSpark, actual TP/DP execution, A5 support, or milestone completion. The
+temporary tools stay on the sync branch and are not promoted as feature code.
+
+## Existing container and target-only tools
 
 `start_container.sh` contains the team's A3 Docker command with each device
 listed explicitly. Run it on the host with Bash; it only creates an interactive
