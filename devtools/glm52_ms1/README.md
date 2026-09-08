@@ -8,7 +8,7 @@ listed explicitly. Run it on the host with Bash; it only creates an interactive
 container, without model loading or preflight. For the second node, set
 `CONTAINER_NAME=tyj-glm52-ms1-target-node1` when invoking it. The image and host
 mounts are visible in the script; after entering the container, change directory
-to `/home/tyj/glm52` before using the commands below.
+to `/home/tyj/glm52/sglang` before using the commands below.
 
 The script mounts the host's entire `/home` at `/home`, following the team's
 container command. Host and container paths are identical: the target is at
@@ -21,7 +21,7 @@ this script or restarting that container does not update them. After pulling the
 new version on the host, create a new container without deleting the old one:
 
 ```bash
-cd /home/tyj/glm52
+cd /home/tyj/glm52/sglang
 CONTAINER_NAME=tyj-glm52-ms1-home-node0 bash devtools/glm52_ms1/start_container.sh
 ```
 
