@@ -34,8 +34,7 @@ docker run -it \
   -v /usr/local/Ascend/firmware:/usr/local/Ascend/firmware:ro \
   -v /etc/ascend_install.info:/etc/ascend_install.info:ro \
   -v /var/queue_schedule:/var/queue_schedule \
-  -v /home/weights:/workspace/weight:ro \
-  -v /home/tyj:/home/tyj \
+  -v /home:/home \
   -e CONTAINER_NAME="${CONTAINER_NAME}" \
   -e HF_HOME=/home/tyj/glm52-ms1/cache/huggingface \
   -e TRANSFORMERS_CACHE=/home/tyj/glm52-ms1/cache/huggingface \

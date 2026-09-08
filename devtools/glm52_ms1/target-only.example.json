@@ -2,7 +2,7 @@
   "_notes": "Set an exact reviewed Git commit and local execution details. Keep the completed configuration and evidence outside the checkout. These capacities are initial diagnostic settings, not final performance acceptance settings.",
   "source_dir": "/SET_ABSOLUTE_SGLANG_CHECKOUT",
   "source_commit": "SET_FULL_TEST_COMMIT",
-  "model_path": "/SET_EXISTING_TARGET_DIRECTORY",
+  "model_path": "/home/weights/GLM-5.2-w8a8",
   "image_reference": "SET_EXISTING_A3_CANN91_IMAGE_REFERENCE",
   "cann_version": "9.1",
   "nnodes": 2,

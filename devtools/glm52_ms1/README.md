@@ -10,6 +10,28 @@ container, without model loading or preflight. For the second node, set
 mounts are visible in the script; after entering the container, change directory
 to `/home/tyj/glm52` before using the commands below.
 
+The script mounts the host's entire `/home` at `/home`, following the team's
+container command. Host and container paths are identical: the target is at
+`/home/weights/GLM-5.2-w8a8`, and personal configuration, cache, and logs remain
+under `/home/tyj/glm52-ms1`. The separate `/workspace/weight` alias is no longer
+created. Driver, firmware, and the other system mounts are unchanged.
+
+An existing container retains the mounts selected when it was created; pulling
+this script or restarting that container does not update them. After pulling the
+new version on the host, create a new container without deleting the old one:
+
+```bash
+cd /home/tyj/glm52
+CONTAINER_NAME=tyj-glm52-ms1-home-node0 bash devtools/glm52_ms1/start_container.sh
+```
+
+Use this new name with `docker exec` and `docker inspect`. In an existing local
+configuration, change `model_path` to `/home/weights/GLM-5.2-w8a8` and update
+`source_commit` to the reviewed commit being run. Copying the example with
+`cp -n` will not update an existing configuration. Files already stored under
+the host-mounted `/home/tyj` remain available in the new container; files saved
+only inside the old container remain there.
+
 The helper provides environment preflight, a launch command preview, foreground
 launch, and three short raw generation requests. It does not install dependencies
 or download model weights. Use an existing Ascend environment and local weights.
@@ -26,6 +48,9 @@ The initial recipe is two nodes with TP32/DP8, ModelSlim target weights, BF16
 computation, and prefill/decode graphs disabled. Each node needs 16 visible NPU
 logical devices. This is a diagnostic configuration, not a performance result.
 Coordinate device and port use before starting a model on a shared server.
+The container itself can be used on one node, but this helper's launch recipe
+still requires two nodes. The mount update does not add a single-node model
+launch recipe.
 
 ```bash
 python devtools/glm52_ms1/ms1_target_only.py preflight \
