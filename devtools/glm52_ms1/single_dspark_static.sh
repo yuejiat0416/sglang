@@ -44,8 +44,9 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SGLANG_REPO=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 KERNEL_REPO=${KERNEL_REPO:-"$SGLANG_REPO/../sgl-kernel-npu"}
 MS1_STATE=${MS1_STATE:-/home/tyj/glm52-ms1}
-TARGET_MODEL=${TARGET_MODEL:-/home/weights/GLM-5.2-w8a8}
-DRAFT_MODEL=${DRAFT_MODEL:-/home/weights/GLM-5.2-DSpark-NPU-0805}
+# The current container maps host /home/weights to /workspace/weight.
+TARGET_MODEL=${TARGET_MODEL:-/workspace/weight/GLM-5.2-w8a8}
+DRAFT_MODEL=${DRAFT_MODEL:-/workspace/weight/GLM-5.2-DSpark-NPU-0805}
 MS1_HOST=${MS1_HOST:-61.47.19.71}
 MS1_PORT=${MS1_PORT:-8810}
 

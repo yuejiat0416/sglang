@@ -26,8 +26,21 @@ bash devtools/glm52_ms1/single_dspark_static.sh
 kernel本轮使用 `ae0fd2cf4498e5c23d644a2854dc377fd87a3ff7`。
 `--ff-only`表示只接受可以直接前进的更新，遇到本地分叉就停止。
 脚本根据自身位置选择SGLang源码，kernel默认是旁边的`sgl-kernel-npu`目录。
-默认host为`61.47.19.71`，target为`/home/weights/GLM-5.2-w8a8`，
-draft为`/home/weights/GLM-5.2-DSpark-NPU-0805`。
+默认host为`61.47.19.71`。负责人确认当前容器仍使用旧挂载：宿主
+`/home/weights`映射为容器`/workspace/weight`，因此target默认路径为
+`/workspace/weight/GLM-5.2-w8a8`，draft为
+`/workspace/weight/GLM-5.2-DSpark-NPU-0805`。本次沿用该容器，不需要重建。
+这也解释了首轮启动的`Repo id must be...`：当时脚本使用了该容器看不到的
+`/home/weights/GLM-5.2-w8a8`。修正路径后仍需继续验证模型加载和真实请求。
+
+下方`start_container.sh`采用整个`/home:/home`的新挂载方案；仅通过Git更新
+脚本不会改变已建容器的挂载。如果以后切换到新建容器，可以使用现有参数覆盖：
+
+```bash
+TARGET_MODEL=/home/weights/GLM-5.2-w8a8 \
+DRAFT_MODEL=/home/weights/GLM-5.2-DSpark-NPU-0805 \
+bash devtools/glm52_ms1/single_dspark_static.sh
+```
 
 配方沿用同事的TP16、DP1、DeepEP auto、prefill、显存和请求上限；移除NEXTN
 配置，加入DSpark static、block8/window9、draft unquant和ascend Attention。
@@ -169,6 +182,10 @@ temporary tools stay on the sync branch and are not promoted as feature code.
 
 ## Existing container and target-only tools
 
+The following `/home:/home` recipe is for a future container migration. The
+current DSpark run uses the existing container's `/workspace/weight` mount as
+described above; do not recreate it for this path fix.
+
 `start_container.sh` contains the team's A3 Docker command with each device
 listed explicitly. Run it on the host with Bash; it only creates an interactive
 container, without model loading or preflight. For the second node, set
@@ -183,8 +200,8 @@ under `/home/tyj/glm52-ms1`. The separate `/workspace/weight` alias is no longer
 created. Driver, firmware, and the other system mounts are unchanged.
 
 An existing container retains the mounts selected when it was created; pulling
-this script or restarting that container does not update them. After pulling the
-new version on the host, create a new container without deleting the old one:
+this script or restarting that container does not update them. Only when you
+choose to migrate to `/home:/home`, create a new container on the host:
 
 ```bash
 cd /home/tyj/glm52/sglang

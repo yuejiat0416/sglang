@@ -79,7 +79,7 @@ class SingleDSparkStaticTests(unittest.TestCase):
         self.assert_option(command, "--state-dir", "/home/tyj/glm52-ms1")
         args = self.server_args(command)
         expected = {
-            "--model-path": "/home/weights/GLM-5.2-w8a8",
+            "--model-path": "/workspace/weight/GLM-5.2-w8a8",
             "--attention-backend": "ascend",
             "--device": "npu",
             "--tp-size": 16,
@@ -97,7 +97,7 @@ class SingleDSparkStaticTests(unittest.TestCase):
             "--host": "61.47.19.71",
             "--port": 8810,
             "--speculative-algorithm": "DSPARK",
-            "--speculative-draft-model-path": "/home/weights/GLM-5.2-DSpark-NPU-0805",
+            "--speculative-draft-model-path": "/workspace/weight/GLM-5.2-DSpark-NPU-0805",
             "--speculative-draft-model-quantization": "unquant",
             "--speculative-draft-attention-backend": "ascend",
             "--speculative-dspark-block-size": 8,
