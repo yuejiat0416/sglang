@@ -3,6 +3,13 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
+`start_container.sh` contains the team's A3 Docker command with each device
+listed explicitly. Run it on the host with Bash; it only creates an interactive
+container, without model loading or preflight. For the second node, set
+`CONTAINER_NAME=tyj-glm52-ms1-target-node1` when invoking it. The image and host
+mounts are visible in the script; after entering the container, change directory
+to `/home/tyj/glm52` before using the commands below.
+
 The helper provides environment preflight, a launch command preview, foreground
 launch, and three short raw generation requests. It does not install dependencies
 or download model weights. Use an existing Ascend environment and local weights.
