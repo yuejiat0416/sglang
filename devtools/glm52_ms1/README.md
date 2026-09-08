@@ -3,6 +3,83 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
+## 本轮：单机 DSpark static 首请求
+
+本轮从192单算子测试进入整模型联调：检查真实草稿加载、上下文KV注入、
+proposal和target验证能否连起来。性能后补，不作为启动本轮的前提。
+本机CPU配置/加载回归不能代替下面的NPU执行；旧71项kernel结果也不能
+替代最终简化入口的47项复测。
+
+在已有0904容器里使用两仓的 `sync/glm52-dspark-ms1` 分支。停止自己正在
+占用整机的服务后，逐行更新并启动（不重建容器、不下载模型）：
+
+```bash
+cd /home/tyj/glm52/sgl-kernel-npu
+git pull --ff-only
+git log -1 --oneline
+cd /home/tyj/glm52/sglang
+git pull --ff-only
+git log -1 --oneline
+bash devtools/glm52_ms1/single_dspark_static.sh
+```
+
+kernel本轮使用 `ae0fd2cf4498e5c23d644a2854dc377fd87a3ff7`。
+`--ff-only`表示只接受可以直接前进的更新，遇到本地分叉就停止。
+脚本根据自身位置选择SGLang源码，kernel默认是旁边的`sgl-kernel-npu`目录。
+默认host为`61.47.19.71`，target为`/home/weights/GLM-5.2-w8a8`，
+draft为`/home/weights/GLM-5.2-DSpark-NPU-0805`。
+
+配方沿用同事的TP16、DP1、DeepEP auto、prefill、显存和请求上限；移除NEXTN
+配置，加入DSpark static、block8/window9、draft unquant和ascend Attention。
+第一步使用`--disable-cuda-graph`便于定位普通执行问题。它只是本次诊断配方，
+没有新增框架层的graph、DP、PP或PD限制，也没有修改宿主CPU调频/sysctl。
+如需先看实际命令，可运行：
+
+```bash
+bash devtools/glm52_ms1/single_dspark_static.sh --print-command
+```
+
+`with_kernel_checkout.py`为本次服务新建
+`/home/tyj/glm52-ms1/kernel-overlay-*/`。其中冻结一份候选Python入口，
+其余包文件与`.so`链接到镜像安装位置；仅本次命令的`PYTHONPATH`优先使用它，
+spawn子进程继承相同路径。不会覆盖site-packages、重编译kernel或替换DeepEP。
+`manifest.json`记录kernel Git状态、源码哈希、命令和路径，`import.json`
+记录新解释器的实际导入位置。包版本仍属于镜像，候选代码身份看Git和源码哈希。
+其他文件是链接，运行期间保持镜像依赖不变。这是临时联调方式，正式wheel安装
+验证仍待后续完成。
+
+等待服务ready后，在另一个已进入容器的终端发一次greedy请求：
+
+```bash
+curl -sS --noproxy '*' http://61.47.19.71:8810/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"GLM-5.2-w8a8","messages":[{"role":"user","content":"请用三句话解释为什么天空看起来是蓝色的。"}],"temperature":0,"max_tokens":64,"stream":false,"return_spec_tokens_details":true}'
+```
+
+请回传启动日志、两仓`git log`结果和完整JSON响应。关注响应
+`sglext.spec_tokens_details.spec_verify_ct`：大于0才有本请求执行投机验证的
+证据，尽量覆盖至少两轮。它与接受率一起用于排查；单次接受率不作性能或质量
+验收。如果只ready还没有真实请求，或响应没有投机统计，不能直接记DSpark通过。
+导入预检失败则回传对应目录的`manifest.json`和`import.stderr.txt`；模型失败
+则保留首个完整traceback，先按真实报错定位，再决定改动位置。
+
+eager首请求通过后再进行整图验证；下列开关已备好，本轮不用同时跑多个服务：
+
+```bash
+GRAPH=1 bash devtools/glm52_ms1/single_dspark_static.sh
+```
+
+后补target-only对照使用同脚本的`MODE=target-only`，并保持两边`GRAPH`值一致。
+`GRAPH=1`恢复同事的`--cuda-graph-bs 16`；不同图模式的结果不能直接归因于DSpark。
+完整推理、图回放、请求边界、量化模型质量、DPA多组、双机与PD仍需分别验证。
+
+临时工具的CPU检查：
+
+```bash
+python3 devtools/glm52_ms1/test_with_kernel_checkout.py -v
+python3 devtools/glm52_ms1/test_single_dspark_static.py -v
+```
+
 ## Native 192 experiment (single NPU)
 
 `probe_native192.py` tests the installed `sgl_kernel_npu` fused kernel with real
