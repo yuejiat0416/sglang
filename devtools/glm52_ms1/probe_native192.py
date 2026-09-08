@@ -20,7 +20,8 @@ import traceback
 
 
 REVIEWED_KERNEL_COMMIT = "d974d3de5b7b0d6586a41f227cba93a861f07fe1"
-REVIEWED_KERNEL_AST = "d5d4dabc1bdd62d4f9d55767b0f1a16dceb917b68f91781f35becf750a60ae89"
+KERNEL_AST_SCHEMA = "python-ast-fields-v1-ignore-empty-type-params"
+REVIEWED_KERNEL_AST = "83898e6fdebe97b7cb0aad2164ab26c1f7e1e5ec52c6103242410e1c29da49d5"
 EPS = 1e-5
 # Existing split_qkv_rmsnorm_rope test's absolute tolerance, used diagnostically.
 # This is not the final GLM model-quality or new-operator acceptance threshold.
@@ -71,12 +72,35 @@ def git_head():
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def source_identity(function):
-    source = textwrap.dedent(inspect.getsource(function))
-    node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef))
-    return source, hashlib.sha256(
-        ast.dump(node, include_attributes=False).encode()
+def canonical_ast(value):
+    """Versioned AST fields, without locations or Python 3.12's empty field."""
+    if isinstance(value, ast.AST):
+        return {
+            "node": type(value).__name__,
+            "fields": {
+                name: canonical_ast(field)
+                for name, field in ast.iter_fields(value)
+                if not (name == "type_params" and field == [])
+            },
+        }
+    if isinstance(value, list):
+        return [canonical_ast(item) for item in value]
+    # Typed representations also preserve bytes, complex numbers and Ellipsis.
+    return {"type": type(value).__name__, "value": repr(value)}
+
+
+def ast_fingerprint(node):
+    payload = {"schema": KERNEL_AST_SCHEMA, "ast": canonical_ast(node)}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def source_identity(function):
+    source = inspect.getsource(function).replace("\r\n", "\n").replace("\r", "\n")
+    source = textwrap.dedent(source).strip("\n") + "\n"
+    node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef))
+    return source, ast_fingerprint(node)
 
 
 def compiled_metadata(compiled):
@@ -328,7 +352,7 @@ def run(args, evidence):
     module = importlib.import_module("sgl_kernel_npu.norm.split_qkv_rmsnorm_rope")
     kernel = module.split_qkv_rmsnorm_rope_kernel
     source, source_hash = source_identity(kernel.fn)
-    (evidence.directory / "installed_kernel.py").write_text(source)
+    (evidence.directory / "installed_kernel.py").write_text(source, encoding="utf-8")
     (evidence.directory / "installed_arange.py").write_text(
         inspect.getsource(semantic.arange)
     )
@@ -340,7 +364,11 @@ def run(args, evidence):
             "triton_path": triton.__file__,
             "semantic_path": semantic.__file__,
             "kernel_module_path": module.__file__,
+            "kernel_function_ast_schema": KERNEL_AST_SCHEMA,
             "kernel_function_ast_sha256": source_hash,
+            "kernel_function_source_sha256": hashlib.sha256(
+                source.encode("utf-8")
+            ).hexdigest(),
             "reviewed_kernel_commit": REVIEWED_KERNEL_COMMIT,
             "matches_reviewed_kernel_ast": source_hash == REVIEWED_KERNEL_AST,
             "device_properties": str(torch.npu.get_device_properties(device)),

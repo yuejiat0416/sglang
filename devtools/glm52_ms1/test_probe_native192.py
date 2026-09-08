@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU checks for the experiment harness; these do not validate NPU execution."""
 
+import ast
 from collections import namedtuple
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -55,6 +57,54 @@ runpy.run_path(sys.argv[1], run_name='probe_import_check')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--graph", result.stdout)
         self.assertIn("--benchmark", result.stdout)
+
+
+class SourceIdentityTests(unittest.TestCase):
+    def test_empty_type_params_matches_absent_field(self):
+        node = ast.parse("def kernel(x):\n    return x * x + 1\n").body[0]
+        absent = copy.deepcopy(node)
+        absent._fields = tuple(name for name in absent._fields if name != "type_params")
+        if hasattr(absent, "type_params"):
+            del absent.type_params
+        with_empty = copy.deepcopy(absent)
+        with_empty._fields += ("type_params",)
+        with_empty.type_params = []
+
+        self.assertEqual(
+            probe.ast_fingerprint(absent), probe.ast_fingerprint(with_empty)
+        )
+        with_empty.type_params = [ast.Name(id="T", ctx=ast.Load())]
+        self.assertNotEqual(
+            probe.ast_fingerprint(absent), probe.ast_fingerprint(with_empty)
+        )
+
+    def test_calculation_changes_fingerprint(self):
+        original = ast.parse("def kernel(x):\n    return x * x / 192\n").body[0]
+        for modified in (
+            "def kernel(x):\n    return x + x / 192\n",
+            "def kernel(x):\n    return x * x / 96\n",
+        ):
+            with self.subTest(modified=modified):
+                self.assertNotEqual(
+                    probe.ast_fingerprint(original),
+                    probe.ast_fingerprint(ast.parse(modified).body[0]),
+                )
+
+    def test_source_normalization_retains_text_for_audit(self):
+        source = "def kernel(x):\n    # Audit comment\n    return x * x\n"
+        indented_crlf = "\r\n    " + source.replace("\n", "\r\n    ").rstrip() + "\r\n"
+        with mock.patch.object(probe.inspect, "getsource", return_value=indented_crlf):
+            normalized, original_hash = probe.source_identity(object())
+        self.assertEqual(normalized, source)
+        with mock.patch.object(
+            probe.inspect, "getsource", return_value=source.replace("Audit", "Different")
+        ):
+            changed_text, changed_hash = probe.source_identity(object())
+        self.assertEqual(original_hash, changed_hash)
+        self.assertNotEqual(
+            probe.hashlib.sha256(normalized.encode()).hexdigest(),
+            probe.hashlib.sha256(changed_text.encode()).hexdigest(),
+        )
 
 
 class ReferenceTests(unittest.TestCase):

@@ -71,6 +71,15 @@ audit is recorded, not mislabeled as the audited commit. No automatic fallback
 to 2x128 is performed: first identify whether a failure is environmental,
 compiler-related, numerical, or specific to graph execution.
 
+New reports record `kernel_function_ast_schema` with the AST fingerprint. This
+schema ignores source locations and empty `type_params` fields added in Python
+3.12; nonempty type parameters and calculation changes remain significant.
+`kernel_function_source_sha256` separately hashes the saved UTF-8 source after
+dedenting, normalizing line endings to LF and keeping one final newline, so
+comments remain available for audit. Older reports without the schema used
+Python-version-dependent AST dumps; their hashes must not be compared directly
+with new ones. Existing reports are not rewritten.
+
 Local tool tests (CPU PyTorch; no Triton/NPU installation required):
 
 ```bash
