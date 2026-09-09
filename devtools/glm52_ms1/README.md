@@ -5,6 +5,11 @@ It is separate from the SGLang feature commits intended for upstream review.
 
 ## 当前轮：GSM8K五模式各10题比较
 
+客户端修正：模板检查读取`--model`而非`--tokenizer`，旧服务名导致HF查找。
+现以本地target作为model/tokenizer，独立served-model-name负责HTTP路由。
+题目已随仓库提供；无需搬运数据集。仅更新客户端后重跑，不重启现有服务。
+新增回归执行社区CLI→模板检查→tokenizer→benchmark准备链路。
+
 负责人确认：DSpark static eager、static graph、target-only eager、target-only graph、
 NEXTN graph（4 steps/topk1/5 tokens），共五组，每组相同10题。
 本轮暂切横向基线比较，未继续改模型/Attention。复用社区 serving benchmark，

@@ -18,6 +18,27 @@ target-only eager/graph和已有NEXTN graph，观察问题是否随题目/算法
 - NEXTN沿用同事配置：steps=4、topk=1、draft_tokens=5；服务解析后algorithm可能显示EAGLE。
 - DSpark沿用已测QuaRot original候选、自有embedding/head和加载时Q-fold，不退回最初2%配方。
 
+## 客户端模型名修正：2026-09-09
+
+若日志在 `Server ready` 后访问 `huggingface.co/GLM-5.2-w8a8/.../config.json`，
+这是旧工具把服务名交给模板检查导致的，与GSM8K数据下载无关。
+当前修正使用 `--model 本地target路径`、`--tokenizer 本地target路径`，
+另用 `--served-model-name GLM-5.2-w8a8` 保持HTTP请求模型名。
+代码中的 `gsm8k10.json` 已包含固定10题；本轮无需再下载或传送数据集。
+
+该错误发生在客户端发题之前。在**客户端终端**按Ctrl+C，然后：
+
+```bash
+cd /home/tyj/glm52/sglang
+git pull
+python3 devtools/glm52_ms1/bench_gsm8k_modes.py run dspark-eager
+```
+
+这次同步只有临时客户端/测试/指南变动，当前服务保持运行，不需重启。
+恢复后应看到 `Loaded 10 OpenAI-format requests` 并开始测试。
+若仍失败，保留首个新错误与新Evidence；不要把网络失败算成接受率失败。
+其他模式也自动使用同一修正，固定10题、统计口径、采样和输出预算保持。
+
 ## 内网怎么跑
 
 两终端必须进入**同一个已有测试容器**。使用原镜像的服务Python；若当前在

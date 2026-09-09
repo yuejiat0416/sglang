@@ -266,3 +266,111 @@ def test_resolved_graph_backend_is_authoritative():
     cfg["cuda_graph_config"]["decode"]["backend"] = "disabled"
     with pytest.raises(ValueError, match="resolved"):
         runner.validate_mode(cfg, "dspark-graph")
+
+
+@pytest.mark.parametrize("mode", runner.MODES)
+def test_community_cli_preparation_uses_local_model_and_http_alias(tmp_path, mode):
+    """Exercise the previously uncovered CLI -> template -> tokenizer boundary.
+
+    Execute current community functions verbatim, replacing model loading and
+    HTTP/NPU work with recording dependencies. No external network or weights.
+    """
+    import argparse
+    import random
+    import sys
+
+    target = tmp_path / "local-target"
+    target.mkdir()
+    args = SimpleNamespace(host="host", port=8810, target=str(target), max_tokens=1024)
+    rows = runner.request_rows(runner.cases()["cases"], mode, 1024)
+    (tmp_path / "requests.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows)
+    )
+    loaded, submitted = [], []
+    tokenizer = SimpleNamespace(init_kwargs={"chat_template": "local template"})
+
+    def from_pretrained(path, **kwargs):
+        loaded.append(path)
+        if not Path(path).is_dir():
+            raise AssertionError(f"Attempted remote model lookup: {path}")
+        return tokenizer
+
+    def dataset(parsed, actual_tokenizer, model_id):
+        assert actual_tokenizer is tokenizer
+        assert parsed.model == str(target)
+        assert parsed.tokenizer == str(target)
+        return [
+            json.loads(line)
+            for line in Path(parsed.dataset_path).read_text().splitlines()
+        ]
+
+    async def benchmark(**kwargs):
+        submitted.append(kwargs)
+        return {"completed": len(kwargs["input_requests"])}
+
+    scope = dict(
+        argparse=argparse,
+        ArgumentParser=argparse.ArgumentParser,
+        ASYNC_REQUEST_FUNCS={"sglang-oai-chat": None},
+        _finite_positive_float=float,
+        _EMBEDDING_BACKENDS=set(),
+        _BACKEND_API_PATHS={"sglang-oai-chat": "/v1/chat/completions"},
+        _DEFAULT_SGLANG_FLUSH_CACHE_TIMEOUT=60,
+        set_ulimit=lambda: None,
+        random=random,
+        np=SimpleNamespace(random=SimpleNamespace(seed=lambda _: None)),
+        json=json,
+        sys=sys,
+        asyncio=asyncio,
+        os=runner.os,
+        resolve_base_url=lambda base, host, port: f"http://{host}:{port}",
+        wait_for_endpoint=lambda url, timeout: True,
+        AutoTokenizer=SimpleNamespace(from_pretrained=from_pretrained),
+        get_dataset=dataset,
+        benchmark=benchmark,
+    )
+    source = ast.parse((runner.REPO / "python/sglang/benchmark/serving.py").read_text())
+    names = {
+        "LoRAPathAction",
+        "cli_main",
+        "_validate_parsed_gsp_args",
+        "run_benchmark",
+        "check_chat_template",
+    }
+    nodes = [
+        n
+        for n in source.body
+        if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names
+    ]
+    utils = ast.parse((runner.REPO / "python/sglang/benchmark/utils.py").read_text())
+    nodes += [
+        n
+        for n in utils.body
+        if isinstance(n, ast.FunctionDef) and n.name == "get_tokenizer"
+    ]
+    assert len(nodes) == 6
+    # Postponed annotations avoid importing unrelated transformers types.
+    module = ast.Module(
+        body=[
+            ast.ImportFrom(
+                module="__future__", names=[ast.alias(name="annotations")], level=0
+            ),
+            *nodes,
+        ],
+        type_ignores=[],
+    )
+    exec(
+        compile(
+            ast.fix_missing_locations(module), "actual_benchmark_preparation", "exec"
+        ),
+        scope,
+    )
+    with mock.patch.object(
+        sys, "argv", ["serving", *runner.bench_arguments(args, tmp_path)]
+    ):
+        scope["cli_main"]()
+    assert loaded == [str(target), str(target)]
+    assert len(submitted) == 1
+    assert submitted[0]["model_id"] == "GLM-5.2-w8a8"
+    assert submitted[0]["input_requests"] == rows
+    assert submitted[0]["warmup_requests"] == 0

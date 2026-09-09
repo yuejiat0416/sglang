@@ -183,7 +183,11 @@ def bench_arguments(args, run):
         args.host,
         "--port",
         str(args.port),
+        # The benchmark checks the chat template using --model before loading
+        # --tokenizer. Keep both local; only the HTTP model uses the service ID.
         "--model",
+        args.target,
+        "--served-model-name",
         "GLM-5.2-w8a8",
         "--tokenizer",
         args.target,
