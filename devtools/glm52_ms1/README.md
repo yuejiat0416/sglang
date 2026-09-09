@@ -20,7 +20,7 @@ QuaRot target 与对应 NPU dense DSpark 路径启用。当前已核对的0805�
 ```bash
 cd /home/tyj/glm52/sglang
 git pull --ff-only
-SGLANG_NPU_GLM_DSPARK_QUAROT=original bash devtools/glm52_ms1/single_dspark_static.sh
+SGLANG_NPU_GLM_DSPARK_QUAROT=original SGLANG_DSPARK_DEBUG_DUMP=core,reqs bash devtools/glm52_ms1/single_dspark_static.sh
 ```
 
 这是服务启动，不是重复上一轮 CPU probe。模型路径仍沿用当前容器的
@@ -33,10 +33,11 @@ SGLANG_NPU_GLM_DSPARK_QUAROT=original bash devtools/glm52_ms1/single_dspark_stat
 初次加载多了 CPU 转换工作，各rank可能重复执行；目前没有加载耗时或性能
 达标结论。转换完成后释放临时矩阵，新增常驻词表由随后的 KV 预算计入。
 
-服务就绪后复用原请求及 `collect_acceptance_trace.py` 的既有执行方式，保留
+服务就绪后运行 `python3 devtools/glm52_ms1/collect_acceptance_trace.py`；它会
+发送与上一轮相同的请求，无需先手工重复发送。保留
 这次启动日志、实际 git HEAD、server_info 和 trace 输出。需要观察首个草稿
 候选的拒绝是否缓解，并按同一 A/P/N 口径与原 `10/424/53` 比较；不改请求来
-选择性展示高接受率。若使用 trace，继续按下文既有方法打开 `core,reqs`。
+选择性展示高接受率。上面的启动命令已保留既有 `core,reqs` 记录设置。
 
 本轮的 `F_i @ Q` 是有已知尺度残差的实机候选，不是 Q 的精确逆。单个请求
 改善不能代替实际 NPU 数值、质量/并发/部署回归、性能及压测接受率>0.5的
