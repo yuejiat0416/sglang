@@ -3,7 +3,57 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
-## 当前轮：加载适配设计与固定输入 FC 对照（仅 CPU）
+## 当前轮：GLM NPU QuaRot 加载候选与真实请求
+
+本轮把前两次诊断支持的候选接入运行代码：草稿加载自身的 embedding/head，
+两个 embedding 入口都使用它们；原始 FC 在加载时以 CPU FP32 分块右乘
+target 的 Q，再回到原参数 dtype（当前 BF16）。推理仍走原 FC→hidden_norm、
+192 融合和 proposal/verify/commit，不新增每轮旋转。
+
+新模式默认关闭。`original` 是你对草稿制品的明确声明：这是一份未经本次
+转换的原始草稿，不是自动识别 checkpoint 坐标。只为 GLM DSA 的 ModelSlim
+QuaRot target 与对应 NPU dense DSpark 路径启用。当前已核对的0805草稿可用于
+这轮候选；不要把已转换过的制品再次声明为 `original`。
+
+本地自测和实际 diff 审视后，先停止当前测试服务，在原容器中执行：
+
+```bash
+cd /home/tyj/glm52/sglang
+git pull --ff-only
+SGLANG_NPU_GLM_DSPARK_QUAROT=original bash devtools/glm52_ms1/single_dspark_static.sh
+```
+
+这是服务启动，不是重复上一轮 CPU probe。模型路径仍沿用当前容器的
+`/workspace/weight`，镜像、CANN、kernel checkout 和单机并行参数沿用原脚本。
+临时前缀只作用于这次命令。无需修改共享权重目录、重建容器或重装算子包。
+
+启动日志应同时出现 `GLM DSpark original mode: folding FC`（含 Q/target 路径）、
+`GLM DSpark FC load-time Q folding finished`（耗时）及
+`DSpark draft uses its checkpoint-local embedding and LM head.`。
+初次加载多了 CPU 转换工作，各rank可能重复执行；目前没有加载耗时或性能
+达标结论。转换完成后释放临时矩阵，新增常驻词表由随后的 KV 预算计入。
+
+服务就绪后复用原请求及 `collect_acceptance_trace.py` 的既有执行方式，保留
+这次启动日志、实际 git HEAD、server_info 和 trace 输出。需要观察首个草稿
+候选的拒绝是否缓解，并按同一 A/P/N 口径与原 `10/424/53` 比较；不改请求来
+选择性展示高接受率。若使用 trace，继续按下文既有方法打开 `core,reqs`。
+
+本轮的 `F_i @ Q` 是有已知尺度残差的实机候选，不是 Q 的精确逆。单个请求
+改善不能代替实际 NPU 数值、质量/并发/部署回归、性能及压测接受率>0.5的
+准出验证。不要因本地单测通过就记为 MS1 已完成。
+
+关闭新模式并重启原脚本即回到之前的共享词表行为；该回退也会回到原来的
+低接受率候选，不代表问题已解决。源权重未被写回。
+checkpoint 重载传入的仍应是原始参数；绕过模型 loader 的 direct tensor 更新
+属于运行参数接口，不能期待它自动完成此转换。
+
+对应源码阶段为 DSpark 模型加载及 target 特征进入草稿 KV；当前实现和逐文件
+审视见[本轮交付](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-09-quarot-runtime/README.md)，
+学习入口为[32.12～32.16](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:5832)。
+
+## Previous：加载适配设计与固定输入 FC 对照（仅 CPU）
+
+这轮诊断及完整报告已经收到；下面保留原方法，不要求重复执行。
 
 上一轮已经收到词表取样结果：embedding 乘 Q 后接近 target，head 还需要
 对应的 norm 处理；Q 往返探针则出现约 0.296% 的幅值收缩。这轮检查草稿
