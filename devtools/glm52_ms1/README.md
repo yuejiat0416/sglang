@@ -3,7 +3,56 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
-## 当前轮：首个 proposal、首层 Attention 对拍
+## 当前轮：已有 FIA 快照的离线残差分析
+
+仍处于 static/eager 低接受率定位中的 **draft proposal 首层 Attention**。
+131149Z 快照已采集完整：所查192融合输出与对应BF16参考一致；FIA输出与
+只在末尾存BF16的CPU数学参考相对L2约0.154%，最大绝对差0.125。
+上一轮给出整体数值，本轮补充差异落在哪些query/head、对应元素大小，
+以及有来源的中间BF16存储参考能解释多少差异。不能仅凭0.125称为一个ULP，
+也不能直接把该残差判为bug或接受率根因。
+
+新增 `analyze_fia_snapshot.py` 与统计辅助模块及各自CPU测试；旧取样工具、
+旧数学参考、SGLang/kernel运行代码均不改。只读同一快照的8份小数组和元数据，
+单线程CPU/NumPy计算，结果写到新的 `fia-analysis-.../report.json` 子目录。
+不加载checkpoint，不请求服务、不运行NPU、不复采、不覆盖原证据。
+该轮工具及说明永久排除正式PR分支；临时debug按最新协作规则自主交付。
+
+在**同一容器另一个终端**，使用原服务Python环境执行：
+
+```bash
+cd /home/tyj/glm52/sglang
+git pull --ff-only
+python3 devtools/glm52_ms1/analyze_fia_snapshot.py --snapshot-dir /home/tyj/glm52-ms1/evidence/proposal-snapshot-20260909T131149Z-27bc59c2
+```
+
+本轮更新只增离线工具/测试和本说明，不修改服务已加载的源码，**无需重启服务**。
+下面历史章节的“重启并重新采集”不适用于本轮。若显示快照或来源不匹配，
+保留错误信息；工具不会靠修改配置/补齐数组继续比较。
+
+回传新 `report.json` 即可，`.npy`继续留在内网。报告包含：
+
+1. 旧FP64参考结果的复算及FP32/FP64参考之间的差异，防止混用证据。
+2. 整体、每query/head残差与最大误差坐标/原值；相邻BF16可表示值的距离分布。
+   这些是描述量，不是新增精度阈值或硬件误差保证。
+3. 一份[Ascend官方测试参考](https://github.com/Ascend/op-plugin/blob/8b9c8534fa41eff367a41c155843daa530ab3a08/test/test_custom_ops/test_npu_fused_infer_attention_score.py#L89)
+   风格的候选：QK/缩放结果按BF16存储、FP32 softmax后转BF16、PV后存BF16。
+   使用实际scale和有效KV；不是对FIA内部精度/累加顺序的观察，也不是逐个尝试cast来拟合结果。
+4. CPU参考的score/概率分布，辅助理解数值放大；不得称为实机FIA中间值。
+
+若来源或布局不一致，先修诊断；若残差集中于个别位置/量级，结合官方数值约定
+继续定位该处；若中间存储参考解释了主要残差，降低本段算术错误的排查优先级。
+任何结果都不能单独证明接受率成因，后续仍需检查完整draft logits/Markov候选与
+同前缀Target verify。不会因本轮数据而自动替换FIA、拆192或更改生产参数。
+
+源码：[原FIA调用](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/hardware_backend/npu/attention/ascend_backend.py:2096)、
+[旧CPU数学参考](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/devtools/glm52_ms1/dspark_attention_reference.py:111)。
+学习：[11.5 Draft双向attention与target因果attention](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:2762)、
+[32.15 分层验证](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:5888)。
+前者解释访问范围，后者解释为什么局部数值证据不能代替整模型验证；教材包含旧基线概念快照。
+[本轮实际diff、来源与验证](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-09-fia-offline-analysis/README.md)。
+
+## 历史轮：首个 proposal、首层 Attention 对拍（已完成取样）
 
 阶段仍是低接受率定位。上轮真实冷 prefill 的 FC/norm→context KV 抽样结果
 未显示明确的局部实现错误；本轮向前检查 **proposal 如何读取这些 KV**。
