@@ -3,6 +3,68 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
+## 当前排查第1步：接受率的逐轮顺序
+
+已有真实请求53轮、10个草稿token接受，总接受率约2.36%；48轮在第一个草稿
+token就被拒绝。汇总histogram没有时间顺序，本轮先区分从头低接受和后期下降。
+这里“第一个草稿token”不是服务输出的第一个token。
+
+只使用社区已有 `core,reqs` 记录，新增独立HTTP采集器；启动脚本、模型、
+Attention、kernel及公共推理流程不改。保持原来的问题、temperature=0、
+max_tokens=64、static/eager、TP16/DP1；本轮不同时更换gamma或开图。
+
+先在原启动终端按Ctrl+C停止自己的服务，退出后更新SGLang同步分支并启动：
+
+```bash
+cd /home/tyj/glm52/sglang
+git pull --ff-only
+SGLANG_DSPARK_DEBUG_DUMP=core,reqs bash devtools/glm52_ms1/single_dspark_static.sh
+```
+
+这次kernel仓没有更新，不需重装包或重建容器。新增环境变量只对本次启动
+生效，原启动脚本会继承它。诊断会增加记录/拷贝开销，不用于性能结论。
+
+服务ready后，在**同一容器的另一个终端**执行：
+
+```bash
+cd /home/tyj/glm52/sglang
+python3 devtools/glm52_ms1/collect_acceptance_trace.py
+```
+
+采集器先读取`/server_info`确认已有逐轮记录，再发一次原chat请求，最后导出
+记录。请求使用唯一rid，仅增加返回元数据和token IDs的选项；无其他推理请求、
+预热或清理cache操作。默认直连`http://61.47.19.71:8810`，忽略HTTP代理，
+与此前curl的`--noproxy '*'`一致。需要指定其他已确认服务时用`--url`。
+
+请回传终端摘要。完整的request、response、server_info前后快照、逐轮trace和
+summary保存在打印出的`/home/tyj/glm52-ms1/evidence/acceptance-trace-*/`中，
+不写Git仓库。采集器的Git SHA不是运行服务源码证明，仍保留本次启动日志及
+已有kernel overlay的来源记录。
+
+| 结果 | 含义与下一步 |
+|---|---|
+| `TRACE_COLLECTED` | 逐轮计数及输出token与本请求核对一致，已取得定位材料；不是模型质量PASS。看接受序列，从头低优先查配对/加载/hidden/proposal，后期下降优先查首次下降前后的KV/位置/commit；两类都保留target verify调查 |
+| `TRACE_REVIEW_REQUIRED` | 计数、token、前缀连续性或请求生命周期有待核查。保留全部数据，先确认记录归属与是否发生retraction，不直接断言模型或KV错误 |
+| `COLLECTION_FAILED` | 请求或取证出口失败，回传摘要；已有JSON仍保留。若服务启用记录后启动失败，回传首个traceback，属于取证入口验证，尚不能归因原低接受率 |
+
+当前overlap可能多记录已经结束请求的后续worker轮。工具以API计数的前N轮为
+候选，核对A/P/N、histogram、输出token及长度连续性，其余行单独保留；有
+retraction时不自动判定候选归属。EOS/长度上限还可能裁掉末轮输出后缀，不能
+用`completion_tokens == 1 + sum(acc_len)`当硬判据，也不能为凑输出长度扣减A。
+原始计数用于接受率，临时buffer无效尾部不当成用户输出。
+
+源码关联：`dspark_observability.py`的`ReqDetail`、`DsparkInfoDumper.dump`与
+`scheduler.get_internal_state`提供记录；新增工具只处理HTTP JSON，不导入
+SGLang/Torch/NPU。对应学习手册27.4的anchor、`gamma+1`与下一轮位置关系；
+具体本地源码和学习链接在项目交付记录中。本轮暂不采集hidden/logits/cache内容，
+有序记录仍不足时，再按首个差异对齐下一轮诊断范围。
+
+CPU采集器检查（不启动模型）：
+
+```bash
+python3 devtools/glm52_ms1/test_collect_acceptance_trace.py -v
+```
+
 ## 本轮：单机 DSpark static 首请求
 
 本轮从192单算子测试进入整模型联调：检查真实草稿加载、上下文KV注入、
