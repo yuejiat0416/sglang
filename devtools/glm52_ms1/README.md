@@ -3,7 +3,63 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
-## Current diagnosis: sampled QuaRot vocabulary weights (CPU only)
+## 当前轮：加载适配设计与固定输入 FC 对照（仅 CPU）
+
+上一轮已经收到词表取样结果：embedding 乘 Q 后接近 target，head 还需要
+对应的 norm 处理；Q 往返探针则出现约 0.296% 的幅值收缩。这轮检查草稿
+接收五层 target hidden 的另一条接口，不能仅凭词表相似就开始修改 FC。
+
+三项工作的关系：自有 embedding/head 与两条 embedding 调用入口是一组；
+五层 hidden→FC 的坐标适配是另一组，可并行设计，最终一起进入真实请求验证。
+本轮工具不改变共享模块、FC、proposal、target 或 kernel 的运行行为。
+
+在当前容器的 SGLang 同步分支更新本轮仅含工具/测试/本说明的提交后，服务可
+保持运行，不需要重装包或重启容器。在仓库目录执行：
+
+```bash
+python3 devtools/glm52_ms1/probe_quarot_fc.py
+```
+
+默认沿用 `/workspace/weight/GLM-5.2-w8a8` 和
+`/workspace/weight/GLM-5.2-DSpark-NPU-0805`，使用 NumPy 和一个 CPU 线程。
+读取完整 Q（144MiB）、draft FC（BF16 360MiB，解码后 F32 720MiB）及
+hidden_norm（12KiB）。不读完整模型，内存预计约 1～2GiB 加解释器/BLAS
+开销；线程限制不意味着不消耗共享 CPU 和内存带宽。
+
+工具生成固定 seed 的三行合成输入，幅值分别为 1、0.01、0.0001，用于区分
+普通幅值和 epsilon 影响明显的情形。它们不是捕获的 target hidden。
+
+| 报告内容 | 实际验证范围 |
+|---|---|
+| `unchanged_fc_pre/post_norm` | 将合成 H 变换为 H×Q 后直接使用原 FC，分别在归一化前后与原 H 的输出比较 |
+| `q_fold_equivalent_pre/post_norm` | 用 `(H×Q)×Q.T` 经原 FC 计算完整输出，检查加载时 FC 右乘 Q 的数学候选和真实 hidden_norm 权重；这通过改变乘法顺序计算，**没有转换全部 FC 权重** |
+| `sampled_weights` | 默认实际转换 16 个 FC 输出行的全部输入列，分别按 FP32 和模拟 BF16 参数存储比较投影；矩阵乘法仍为 FP32，不是 NPU 精度验证 |
+| `q_structure` / `q_roundtrip` | 全部 Q 行的范数/元素绝对值范围及固定输入的往返误差；不构造完整 Q×Q.T，不拟合补偿系数或求逆 |
+
+只转换少量输出行，可避免五次 6144 维完整矩阵乘法。所选行的结果也不冒充
+完整转换后的 FC→hidden_norm 验证；真实权重全量转换、NPU 算术和实际 target
+特征需要在后续候选实现里验证。报告没有自定义精度通过阈值。
+
+输出目录为 `/home/tyj/glm52-ms1/evidence/quarot-fc-<UTC>-<uuid>/`。
+请保留并回传终端结果和 `report.json`。`FIXED_INPUT_DIAGNOSTIC_COLLECTED`
+仅表示计算完成；`NUMERICAL_REVIEW_REQUIRED` 表示非有限值或零范数等需核查；
+`FAILED` 表示输入/工具错误。任何状态都不代表接受率或性能通过。
+
+若 Q 候选明显改善且归一化后保留误差可解释，再评审加载适配；若方向、尺度或
+采样 BF16 转换不符，先解决该项数值差异，不用重启服务盲试补偿。
+可选参数：`--target`、`--draft`、`--out`、`--threads`、`--weight-rows`
+（默认16，工具上限64行）。固定输入不受模型请求和随机采样参数影响。
+
+源码阶段：[已有 FC→hidden_norm](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/models/dflash.py:662)
+随后用于草稿上下文 KV；[外部 embedding 选择](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/speculative/dspark_components/dspark_draft.py:253)
+属于另一项调用覆盖。学习对应[32.15 加载与固定输入验证](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:5888)
+与[32.16 方案及代价](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:5917)。
+
+```bash
+python3 devtools/glm52_ms1/test_probe_quarot_fc.py -v
+```
+
+## Previous diagnosis: sampled QuaRot vocabulary weights (CPU only)
 
 The ordered trace shows low acceptance from the start. The target export records
 QuaRot and provides `global_rotation` as F32 `[6144, 6144]`; its separate
