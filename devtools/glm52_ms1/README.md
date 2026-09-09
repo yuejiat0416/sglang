@@ -3,7 +3,54 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
-## 当前轮：固定多输入、较长输出的接受率诊断
+## 当前轮：固定 token 前缀，核对 Target prefill 与历史 verify
+
+已有12请求总接受率为27.72%。这一轮继续定位原因：把同一轮的完整前缀、
+anchor和draft候选固定下来，看Target重新prefill得到的预测与历史verify决定
+是否一致。它不是提接受率的新补丁，也不是独立target-only精度或压测。
+
+从已保存的天空题中选择首轮、首次零接受和首次全接受，重合的轮只选一次；
+每轮复算两次，最多6条串行HTTP请求，每条只生成1个token。不重分词、不套新
+聊天模板，不新增题目。给每次请求独立cache_salt并检查cached_tokens=0，避免
+复用旧KV；不清全局缓存。当前DSPARK服务的prefill仍会注入draft hidden，
+overlap可能执行额外未结算工作，不能理解成完全不执行draft。
+
+在**当前服务所在容器的另一个终端**执行，原服务保持运行：
+
+```bash
+cd /home/tyj/glm52/sglang
+git pull --ff-only
+python3 devtools/glm52_ms1/probe_verify_prefill.py --source /home/tyj/glm52-ms1/evidence/acceptance-suite-20260909T063207Z-6e53c35a/01-sky_baseline-r1 --run
+```
+
+不带`--run`时只读取旧证据、准备`plan.json`，不联系服务。不要将`--source`
+指向套件总目录，需要指向上述单请求子目录。无需安装依赖或重新启动模型。
+脚本在model采样默认模式下只读当前target的`generation_config.json`，确认
+没有repetition penalty等干扰；文件和历史加载版本未变仍是比较前提。
+
+本轮新增工具入口是[probe_verify_prefill.py](probe_verify_prefill.py)，CPU测试
+在[test_probe_verify_prefill.py](test_probe_verify_prefill.py)。仅这两个临时文件
+及本README发生变化；SGLang运行代码和kernel仓无改动。
+
+旧`core,reqs`记录没有完整verify logits，只能知道**已接受前缀及bonus**的预测。
+脚本只比较这些已知位置，其余标记unknown；同时记录top-5和前两名分差，
+分数并列单独展示。没有自定精度容差，也不输出模型正确性PASS。
+
+| 本轮结果 | 下一步 |
+|---|---|
+| 同前缀的两次prefill自身不同 | 先定位Target/执行稳定性及分数并列，暂不归罪draft |
+| prefill重复稳定，但已知位置与历史verify不同 | 查Target prefill/verify计算、位置、KV和数值差异；不同本身尚不能断言错误 |
+| 已知位置一致 | 缩小这些位置的verify疑点，下一轮采集真实hidden并核对draft输入/上下文KV；不能宣告整个verify正确 |
+| 采集失败或中断 | 保留当前Evidence，先看异常；不自动重试或继续剩余请求 |
+
+请回传新Evidence目录里的`report.json`。`COMPARISON_COLLECTED`只表示采集完成；
+超时或中断也不保证服务端已停止处理。原始请求、响应、逐项比较、配置及文件
+指纹都留在同一目录，必要时再取对应个案，无需先上传全部历史日志。
+
+源码定位、实际diff与本地验证见[本轮交付](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-09-verify-prefill/README.md)。
+学习对应[第18章：规划、打包、验证和状态提交](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:3552)，重点理解anchor、候选与bonus为何错开一位。
+
+## Previous：固定多输入、较长输出的接受率诊断
 
 QuaRot加载日志及原64-token请求已核对：16rank完成FC转换，草稿使用自有
 embedding/head，接受率由2.36%改善至28.95%。本轮保持当前服务，检查改善
