@@ -3,7 +3,50 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
-## 当前轮：固定 token 前缀，核对 Target prefill 与历史 verify
+## 当前轮：先校准CPU局部参考，尚不取样真实服务
+
+仍处于低接受率定位。上一轮六次固定前缀请求已返回：14个历史已知位置
+各复算两次，28次比较一致；三对prefill的27个位置top-1一致，但分数间距
+存在变化。这降低了所测位置明显verify错位的疑点，不代表整模型正确或
+接受率达标。原始分数补充核对仍待完成，无需重跑已有请求。
+
+本轮先建立可审视的局部计算参考。新增`dspark_local_reference.py`，用NumPy
+实现FC、RMSNorm、选定位置的RoPE，以及逐层context K/V计算；返回每一步
+的数组，方便下一轮在同一真实输入下比较。没有snapshot读取/采集CLI、
+服务hook、checkpoint加载、HTTP请求或KV池写入，不要将这个模块当启动脚本。
+
+计算参考默认FP32，可选FP64；`bf16_storage=True`只模拟输出存储边界，
+不会自动舍入输入/权重。RoPE表的dtype独立指定或使用保存的表行。当前
+组合为无bias的dense上下文路径、完整head旋转、norm乘权重后再cast；
+不将它未经核对用于其他模型语义。CPU参考不能精确模拟NPU累加顺序。
+
+新增`test_dspark_local_reference.py`先用手算例子和PyTorch CPU公式交叉核对，
+覆盖192维、不同层/head/位置、两种RoPE配对和BF16中间舍入。交换层、token、
+head的负例用于检查差异能否被观察。测试中的PyTorch默认比较精度只用于
+这些CPU校准用例，不是本项目新设的NPU/模型验收阈值。
+
+**本轮由开发机完成校准，负责人不需要停服务、重启或运行新请求。** 参考
+模块本身只依赖NumPy；校准测试另使用pytest和PyTorch CPU。没有新增或升级
+服务镜像依赖。审视实际diff和校准证据后，再对齐有限真实取样的入口、
+TP范围、数据量及参考重放，届时才给远端命令。
+
+结果分流：参考校准失败先修工具；通过后只能进入真实数据取样准备。下一轮
+若局部实际计算与参考不同，先解释输入/权重/位置/dtype和差异来源，再形成
+修复方案；若一致，继续检查捕获语义和后续草稿网络。`tensor_difference`
+只返回数值、有限性和精确相等标记，没有容差或质量PASS；精确相等本身也
+不能证明输入/权重正确。零范数指标未定义时为null；数值指标溢出会显式标记。
+
+当前源码基线`4b222b15bf`：
+[FC与hidden_norm](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/models/dflash.py:662)、
+[逐层K/V计算](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/models/dflash.py:319)、
+[KV融合的BF16边界](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/kernels/ops/speculative/dspark/fused_kv_write.py:62)。
+学习对应[11.4 Target hidden怎样变成draft上下文](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:2741)，理解本轮计算段；
+[32.15逐层验证](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:5888)区分参考校准与真实请求证明。教材含旧integration快照，当前行为以基线源码为准。
+
+本轮只增两个临时文件并更新本README，运行源码、kernel及默认部署配置不改。
+实际diff与验证见[本轮交付](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-09-local-reference/README.md)。
+
+## Previous：固定 token 前缀，核对 Target prefill 与历史 verify
 
 **2026-09-09实机更新：首次请求触发输入logprob融合算子编译崩溃。**
 `row_logsumexp_topk → bishengir-compile`在Ascend910_9362上SIGSEGV，
