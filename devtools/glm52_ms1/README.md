@@ -3,7 +3,93 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
-## 当前轮：真实上下文取样，然后CPU复算
+## 当前轮：首个 proposal、首层 Attention 对拍
+
+阶段仍是低接受率定位。上轮真实冷 prefill 的 FC/norm→context KV 抽样结果
+未显示明确的局部实现错误；本轮向前检查 **proposal 如何读取这些 KV**。
+负责人已批准一个 RID、首个 proposal、首层、TP rank0 的4个192维head。
+结束位置在 Attention 输出投影/all-reduce之前，不包含后续层、Markov或verify。
+
+本轮只新增临时观察/离线参考/工具测试，**不改 SGLang 生产文件或 kernel**。
+保留192融合操作、QuaRot original、TP16/DP1、static/eager及当前单机配方。
+这不是接受率修复、精度验收或性能测试；取样会额外同步，耗时不能用于性能结论。
+本轮所有工具、测试和文档仅留 `sync/glm52-dspark-ms1`，不进入正式PR分支。
+
+### 执行前先理解本轮记录什么
+
+1. **输入与加载**：anchor+7个mask对应的实际embedding，以及首层局部QKV权重；
+   客户端直接读取checkpoint对应行核对，避免只拿同一份加载错误的权重自我验证。
+2. **准备与写池**：首层input norm→实际消费的QKV投影→192融合Q/K norm+RoPE，
+   以及当前块K/V写入。原代码外层还有一次未使用的QKV投影，本轮不修改它；
+   只记录真正送进融合入口的投影结果。融合内norm后没有BF16中间落盘，参考遵守这一点。
+3. **读池与计算**：真实FIA参数、页表/有效长度/mask、实际读取的KV及输出。
+   用请求→slot表独立检查顺序，再用实际Q/K/V复算Attention；不把重算出的KV
+   冒充实机读到的KV。预期全可见与实际mask独立核查。
+
+当前天空题冷输入23个token，首proposal预期8个query、31个有效KV。
+工具会核对实际值，**不会补齐或裁剪到预期来获得一致**。
+数组预算64MiB，主要是一份rank0首层QKV权重；只取本请求所需池行，不导出全池。
+未知布局/分支会记录诊断失败，不切换原运行路径。
+
+### 1. 服务端终端：Ctrl+C停止自己的旧服务后执行
+
+使用同一容器的原服务Python环境，不用进入EvalScope环境、不安装新包。
+当前终端应在临时同步分支；`--ff-only`用于避免pull意外产生合并提交。
+
+```bash
+cd /home/tyj/glm52/sglang
+git pull --ff-only
+python3 devtools/glm52_ms1/with_proposal_snapshot.py
+```
+
+wrapper调用原来的 `single_dspark_static.sh`。沿用当前权重目录
+`/workspace/weight/GLM-5.2-w8a8` 与 `/workspace/weight/GLM-5.2-DSpark-NPU-0805`，
+以及当前kernel checkout包装；保留 `SGLANG_ENABLE_FAST_INPUT_LOGPROBS=0`。
+启动打印 `Proposal snapshot evidence` 并等指定RID，不会自动发起请求。
+等服务ready再执行第2步。不要同时叠加上轮context snapshot wrapper。
+
+### 2. 同一容器另一个终端：只执行一次
+
+```bash
+cd /home/tyj/glm52/sglang
+python3 devtools/glm52_ms1/probe_proposal_snapshot.py
+```
+
+这是客户端，默认请求 `http://61.47.19.71:8810`：先核对服务配置，发一次固定
+天空题，temperature=0、输出上限64、独立cache_salt，然后自动CPU离线复算。
+不请求input logprob、不清全局cache、不重试请求。脚本从个人目录找到对应RID。
+
+完成后回传Evidence下的 `comparison.json` 和 `snapshot.json`。
+`.npy` 权重/激活和较长的 `checkpoint-reads.json` 留内网。
+如果失败，回传 `comparison-error.json` / snapshot错误及相关服务日志，先不要重跑。
+已有完整快照可以 `python3 devtools/glm52_ms1/probe_proposal_snapshot.py --replay <Evidence目录>`
+只重新离线计算。离线回放会核对文件SHA、工具版本、RID与权重文件身份，不重复服务请求。
+
+### 结果怎样决定下一轮
+
+`PROPOSAL_COMPARISON_COLLECTED`仅表示采集和比较完成，不代表精度PASS。
+先看 `structural_issues`，再按comparison中的边界顺序看连续误差。
+没有新增模型容差；工具校准中的PyTorch默认容差只验证CPU参考实现。
+
+| 观察 | 下一步 |
+|---|---|
+| checkpoint行与实际embedding/QKV权重不同 | 先定位加载/分片/坐标接口，提出修复方案 |
+| 实际QKV准备出现不能解释的差异 | 定位norm、投影或融合对应边界，保留原融合供核查 |
+| slot、长度或mask不符合合同 | 定位请求映射/metadata；不能因算术自洽就认定正确 |
+| 同一实际Q/K/V的Attention输出出现不能解释的差异 | 检查实际FIA调用/算子行为 |
+| 所测边界均吻合或差异可解释 | 再共同决定查后续层/Markov，或后续轮次commit与注入 |
+
+源码观察点（基线 `0fd40bdd16`，均不修改）：
+[proposal构造](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/speculative/dspark_components/dspark_draft.py:373)、
+[实际NPU准备](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/models/dflash.py:256)、
+[FIA与实际页表](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/hardware_backend/npu/attention/ascend_backend.py:1987)。
+学习对应[11.4 上下文特征注入](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:2741)
+与[11.5 Draft双向Attention](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:2762)：
+从前者“生成/写入KV”推进到后者“读取KV并生成草稿特征”。教材含旧integration快照，
+本轮实现以上述源码为准。
+[实际diff与验证记录](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-09-first-proposal-attention/README.md)。
+
+## 上轮归档：真实上下文取样，然后CPU复算
 
 本轮仍在排查低接受率。CPU参考已校准；现在把同一次真实请求的实际输入、
 加载参数和输出保存下来，逐段复算。工具只留在临时sync分支，连同参考及
