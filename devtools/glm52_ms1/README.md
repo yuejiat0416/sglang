@@ -3,7 +3,81 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
-## 当前轮：先校准CPU局部参考，尚不取样真实服务
+## 当前轮：真实上下文取样，然后CPU复算
+
+本轮仍在排查低接受率。CPU参考已校准；现在把同一次真实请求的实际输入、
+加载参数和输出保存下来，逐段复算。工具只留在临时sync分支，连同参考及
+诊断测试都不进入社区PR正式开发分支，即使后续达到准出也不提升这些提交。
+
+范围固定：天空题一次、temperature=0、64输出上限、独立cache_salt；首次
+冷prefill、TP rank0、首/中/末三个token行、五层草稿在该rank的KV head。
+覆盖FC、hidden_norm、上下文KV投影、K norm/RoPE及写池，保留实际分支。
+不是GSM8K/GPQA、压测或接受率修复，诊断耗时不能作为性能结果。
+
+本地已校准工具；NPU真实取样尚未执行。使用同一容器的原服务Python环境，
+无需安装包或切换EvalScope环境。权重和大数组只留内网；预算1GiB以内。
+
+### 1. 服务端终端：先Ctrl+C停止原服务，再执行
+
+```bash
+cd /home/tyj/glm52/sglang
+git pull --ff-only
+python3 devtools/glm52_ms1/with_context_snapshot.py
+```
+
+这会调用原`single_dspark_static.sh`，沿用当前模型路径、TP16/DP1、NPU
+kernel包装及static/eager配方；显式保留QuaRot original、core/reqs记录及
+`SGLANG_ENABLE_FAST_INPUT_LOGPROBS=0`。不改默认脚本或安装包。
+启动会打印`Context snapshot evidence`，并准备一个唯一RID等待客户端；
+此时没有请求。等原服务出现ready再执行下一步。
+
+### 2. 同一容器另一个终端：只执行一次
+
+```bash
+cd /home/tyj/glm52/sglang
+python3 devtools/glm52_ms1/probe_context_snapshot.py
+```
+
+这是客户端：查询服务配置，发一次chat请求，然后自动用CPU复算，默认连接
+`http://61.47.19.71:8810`。不请求输入logprob，不清全局cache、不自动重试。
+通过共享个人目录找到当前启动配置，不需要手抄RID或Evidence路径。
+
+完成后回传打印的Evidence目录中的`comparison.json`与`snapshot.json`。
+`.npy`数组包含实际权重和激活，不用传出内网。客户端失败时保留
+`comparison-error.json`与已有snapshot/服务日志；不要重复请求来覆盖现场。
+已取得完整数据后，可使用`--replay <该Evidence目录>`仅重做离线复算，不重发请求。
+
+### 怎么读结果、下一步做什么
+
+`CONTEXT_COMPARISON_COLLECTED`表示记录完整并完成计算，不表示精度PASS。
+报告只给真实差值，不增加模型或算子容差。先看输入身份/地址/权重布局检查，
+再按FC→norm→KV→RoPE/写池顺序解释差异；下一段始终用同一实际上游输入
+隔离比较，另保留整段连续参考，避免把FC差异归罪norm。
+
+- 融合写入路径：记录真实KV投影和写后KV，K norm/RoPE/write作为一组比较；
+  内部未返回的张量不伪称真实取样。
+- NPU分页池通常走stacked路径：在原函数返回时读取其真实局部张量，RoPE
+  输入在原模块调用前复制；因此可以分别检查KV投影、K norm、RoPE和写池。
+  Python返回事件观察仅在这一次原函数调用内启用并恢复，不替换F.linear。
+- 未覆盖的逐层路径、预投影hidden、其他pool/额外RoPE缓存等会报告未覆盖，
+  不通过切换计算路径制造结果。诊断Python错误记录后继续原调用，原服务异常
+  保持原异常；NPU底层异常风险尚无实机验证，不能由CPU测试承诺完全排除。
+
+若局部差异无法解释，先定位该段并提出最小修复方案；若所测边界吻合，继续
+查Target特征语义、后续proposal及decode/commit。单rank三行不能证明完整模型。
+本轮执行结束后无需立刻再跑或切配置，先审查报告。
+
+当前生产基线为`c31bff5081`，本轮没有生产diff。源码入口：
+[FC/norm](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/models/dflash.py:662)、
+[context KV](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/models/dspark.py:803)、
+[stacked计算](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/models/dspark.py:889)、
+[NPU分页布局](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/hardware_backend/npu/memory_pool_npu.py:109)。
+学习对应[11.4 Target hidden怎样变成draft上下文](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:2741)
+和[32.15怎样逐层验证](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:5888)。
+教材含旧integration快照，具体行为以当前源码及实机分支记录为准。
+[本轮实际diff与验证记录](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-09-context-snapshot/README.md)。
+
+## Previous：CPU局部参考校准完成
 
 仍处于低接受率定位。上一轮六次固定前缀请求已返回：14个历史已知位置
 各复算两次，28次比较一致；三对prefill的27个位置top-1一致，但分数间距
