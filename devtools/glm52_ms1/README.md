@@ -3,7 +3,21 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
-## 当前轮：已有 FIA 快照的离线残差分析
+## 当前轮：GSM8K五模式各10题比较
+
+负责人确认：DSpark static eager、static graph、target-only eager、target-only graph、
+NEXTN graph（4 steps/topk1/5 tokens），共五组，每组相同10题。
+本轮暂切横向基线比较，未继续改模型/Attention。复用社区 serving benchmark，
+仅临时客户端捕获原始A/P/N；数据随代码提供，无需EvalScope或再次下载。
+
+[两终端执行步骤、结果判读和下一步](GSM8K_MODES.md)。先停止当前诊断服务后同步，
+第一组：`python3 devtools/glm52_ms1/bench_gsm8k_modes.py launch dspark-eager`；
+另一终端：`python3 devtools/glm52_ms1/bench_gsm8k_modes.py run dspark-eager`。
+保留QuaRot original候选，统一metrics、无额外benchmark warmup、串行最多1024输出token。
+本轮只作接受率诊断，graph配置/Target实际图计数/Draft回放证据分别记录。
+不把原生非流式TTFT、服务累计Accept length或本批10题当正式验收成绩。
+
+## 上一轮：已有 FIA 快照的离线残差分析
 
 仍处于 static/eager 低接受率定位中的 **draft proposal 首层 Attention**。
 131149Z 快照已采集完整：所查192融合输出与对应BF16参考一致；FIA输出与

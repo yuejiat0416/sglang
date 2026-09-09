@@ -14,6 +14,9 @@ Usage: bash devtools/glm52_ms1/single_dspark_static.sh [--print-command]
 Defaults: MODE=dspark, GRAPH=0 (static/eager), TP16/DP1 on one A3 node.
 Set GRAPH=1 to use the original --cuda-graph-bs 16 setting.
 Set MODE=target-only for the same recipe without speculative decoding.
+Set MODE=nextn for the team's existing NEXTN recipe (4 steps, topk 1, 5 tokens).
+GRAPH=0/1 also selects eager/graph for target-only and NEXTN.
+Set ENABLE_METRICS=1 to expose runtime metrics (default: 0).
 Optional overrides: MS1_HOST, MS1_PORT, TARGET_MODEL, DRAFT_MODEL,
                     KERNEL_REPO, MS1_STATE.
 --print-command prints the environment/command without sourcing CANN or starting
@@ -31,13 +34,18 @@ fi
 
 MODE=${MODE:-dspark}
 GRAPH=${GRAPH:-0}
+ENABLE_METRICS=${ENABLE_METRICS:-0}
 case "$MODE" in
-  dspark|target-only) ;;
-  *) printf 'MODE must be dspark or target-only.\n' >&2; exit 2 ;;
+  dspark|target-only|nextn) ;;
+  *) printf 'MODE must be dspark, target-only or nextn.\n' >&2; exit 2 ;;
 esac
 case "$GRAPH" in
   0|1) ;;
   *) printf 'GRAPH must be 0 or 1.\n' >&2; exit 2 ;;
+esac
+case "$ENABLE_METRICS" in
+  0|1) ;;
+  *) printf 'ENABLE_METRICS must be 0 or 1.\n' >&2; exit 2 ;;
 esac
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -118,11 +126,24 @@ if [ "$MODE" = dspark ]; then
     --speculative-dspark-block-size 8
     --speculative-num-draft-tokens 9
   )
+elif [ "$MODE" = nextn ]; then
+  # The existing GLM NEXTN layers come from the target checkpoint.
+  # Do not attach the separate DSpark draft or its proposal configuration.
+  SERVER_ARGS+=(
+    --speculative-algorithm NEXTN
+    --speculative-num-steps 4
+    --speculative-eagle-topk 1
+    --speculative-num-draft-tokens 5
+    --speculative-draft-model-quantization unquant
+  )
 fi
 if [ "$GRAPH" = 1 ]; then
   SERVER_ARGS+=(--cuda-graph-bs 16)
 else
   SERVER_ARGS+=(--disable-cuda-graph)
+fi
+if [ "$ENABLE_METRICS" = 1 ]; then
+  SERVER_ARGS+=(--enable-metrics)
 fi
 
 # The helper selects this checkout for this process and its spawned workers.

@@ -21,6 +21,7 @@ class SingleDSparkStaticTests(unittest.TestCase):
         for key in (
             "MODE",
             "GRAPH",
+            "ENABLE_METRICS",
             "MS1_HOST",
             "MS1_PORT",
             "TARGET_MODEL",
@@ -166,6 +167,63 @@ class SingleDSparkStaticTests(unittest.TestCase):
                 self.assertEqual(self.server_args(target_command), expected)
                 self.assertEqual(draft_env, target_env)
 
+    def test_nextn_preserves_working_recipe_without_dspark_arguments(self):
+        for graph in ("0", "1"):
+            with self.subTest(graph=graph):
+                target_env, target_deleted, target_command = self.printed_command(
+                    MODE="target-only", GRAPH=graph
+                )
+                nextn_env, nextn_deleted, nextn_command = self.printed_command(
+                    MODE="nextn",
+                    GRAPH=graph,
+                    DRAFT_MODEL="/unused/dspark/checkpoint",
+                )
+                args = self.server_args(nextn_command)
+                expected_spec = {
+                    "--speculative-algorithm": "NEXTN",
+                    "--speculative-num-steps": 4,
+                    "--speculative-eagle-topk": 1,
+                    "--speculative-num-draft-tokens": 5,
+                    "--speculative-draft-model-quantization": "unquant",
+                }
+                for name, value in expected_spec.items():
+                    self.assert_option(args, name, value)
+                self.assertEqual(
+                    {arg for arg in args if arg.startswith("--speculative-")},
+                    set(expected_spec),
+                )
+                self.assertNotIn("/unused/dspark/checkpoint", args)
+                actual_base = []
+                iterator = iter(args)
+                for arg in iterator:
+                    if arg in expected_spec:
+                        next(iterator)
+                    else:
+                        actual_base.append(arg)
+                self.assertEqual(actual_base, self.server_args(target_command))
+                self.assertEqual(nextn_env, target_env)
+                self.assertEqual(nextn_deleted, target_deleted)
+                self.assertEqual(
+                    nextn_command[: nextn_command.index("--")],
+                    target_command[: target_command.index("--")],
+                )
+
+    def test_metrics_switch_only_adds_runtime_metrics_flag(self):
+        for mode in ("dspark", "target-only", "nextn"):
+            for graph in ("0", "1"):
+                with self.subTest(mode=mode, graph=graph):
+                    default = self.printed_command(MODE=mode, GRAPH=graph)
+                    disabled = self.printed_command(
+                        MODE=mode, GRAPH=graph, ENABLE_METRICS="0"
+                    )
+                    enabled = self.printed_command(
+                        MODE=mode, GRAPH=graph, ENABLE_METRICS="1"
+                    )
+                    self.assertEqual(default, disabled)
+                    self.assertEqual(enabled[:2], default[:2])
+                    self.assertEqual(enabled[2], [*default[2], "--enable-metrics"])
+                    self.assertNotIn("--enable-metrics", default[2])
+
     def test_print_is_side_effect_free_and_preserves_quoted_overrides(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -295,7 +353,12 @@ class SingleDSparkStaticTests(unittest.TestCase):
                 self.assertFalse(marker.exists())
 
     def test_invalid_switches_fail_before_launch(self):
-        for overrides in ({"GRAPH": "2"}, {"MODE": "nextn"}):
+        for overrides in (
+            {"GRAPH": "2"},
+            {"MODE": "unsupported"},
+            {"ENABLE_METRICS": "2"},
+            {"ENABLE_METRICS": "true"},
+        ):
             with self.subTest(overrides=overrides):
                 result = self.run_script("--print-command", overrides=overrides)
                 self.assertEqual(result.returncode, 2)
@@ -311,6 +374,8 @@ class SingleDSparkStaticTests(unittest.TestCase):
         result = self.run_script("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("MODE=target-only", result.stdout)
+        self.assertIn("MODE=nextn", result.stdout)
+        self.assertIn("ENABLE_METRICS=1", result.stdout)
 
 
 if __name__ == "__main__":
