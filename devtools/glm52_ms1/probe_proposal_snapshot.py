@@ -28,6 +28,7 @@ from collect_acceptance_trace import PROMPT, request_json
 from dspark_attention_reference import (
     attention,
     fused_prepare,
+    input_norm,
     paged_slots,
     slot_contract,
 )
@@ -35,7 +36,6 @@ from dspark_context_snapshot import file_hash, require, write_json
 from dspark_local_reference import (
     bf16_round,
     linear,
-    rms_norm,
     rope_cos_sin,
     tensor_difference,
 )
@@ -247,11 +247,22 @@ def compare_snapshot(root):
     compare("checkpoint_embedding_vs_layer_input", embedding, get("input_embedding"))
     compare("checkpoint_qkv_shard_vs_runtime_weight", raw_weight, get("qkv_weight"))
     compare("embedding_to_norm_input", get("input_embedding"), get("norm_input"))
-    norm = rms_norm(
-        get("norm_input"), get("input_norm_weight"), snapshot["input_norm_eps"]
-    )
-    compare("norm_same_input_math", norm, get("norm_output"))
-    compare("norm_same_input_bf16_storage", bf16_round(norm), get("norm_output"))
+
+    def bias(name):
+        return get(name) if snapshot["bias"][name]["present"] else None
+
+    norm_stored = None
+    norm_mode = snapshot["input_norm_reference_mode"]
+    if norm_mode != "uncovered":
+        norm_math, norm_stored = input_norm(
+            get("norm_input"),
+            get("input_norm_weight"),
+            snapshot["input_norm_eps"],
+            bias=bias("input_norm_bias"),
+            mode=norm_mode,
+        )
+        compare("norm_same_input_math", norm_math, get("norm_output"))
+        compare("norm_same_input_bf16_storage", norm_stored, get("norm_output"))
     compare("norm_output_to_qkv_input", get("norm_output"), get("qkv_input"))
     projection = linear(get("qkv_input"), raw_weight)
     compare("qkv_same_input_math", projection, get("qkv_output"))
@@ -268,6 +279,8 @@ def compare_snapshot(root):
             heads,
             dim,
             bf16_storage=store,
+            q_bias=bias("q_norm_bias"),
+            k_bias=bias("k_norm_bias"),
         )
         for label, value in zip(("q", "k", "v"), prepared):
             compare(
@@ -328,7 +341,7 @@ def compare_snapshot(root):
                 out,
             )
         attention_status = "SAME_ACTUAL_INPUTS_COMPARED"
-        if all(
+        if norm_stored is not None and all(
             contracts[k]
             for k in (
                 "same_ordered_slots",
@@ -341,7 +354,7 @@ def compare_snapshot(root):
         ):
             # Separate propagation experiment: keep ACTUAL context KV and norm
             # input; recompute current Q/K/V through norm and checkpoint QKV.
-            composed_qkv = bf16_round(linear(bf16_round(norm), raw_weight))
+            composed_qkv = bf16_round(linear(norm_stored, raw_weight))
             cq, ck, cv = fused_prepare(
                 composed_qkv,
                 get("q_norm_weight"),
@@ -352,6 +365,8 @@ def compare_snapshot(root):
                 heads,
                 dim,
                 bf16_storage=True,
+                q_bias=bias("q_norm_bias"),
+                k_bias=bias("k_norm_bias"),
             )
             composed = attention(
                 cq,
@@ -381,6 +396,9 @@ def compare_snapshot(root):
             k for k, v in contracts.items() if isinstance(v, (bool, np.bool_)) and not v
         ],
         "attention_replay": attention_status,
+        "bias": snapshot["bias"],
+        "fused_bias_enabled": snapshot["fused_bias_enabled"],
+        "input_norm_reference_mode": norm_mode,
         "comparisons": comparisons,
         "checkpoint": checkpoint,
         "observed_source": snapshot["source"],
@@ -471,6 +489,8 @@ def main():
         return 1
     print(result["status"])
     print("Structural issues:", result["structural_issues"])
+    print("Input norm reference:", result["input_norm_reference_mode"])
+    print("Observed bias:", result["bias"])
     for name, value in result["comparisons"].items():
         print(
             f"{name}: relative_l2={value['relative_l2']} max_abs={value['max_abs_error']}"

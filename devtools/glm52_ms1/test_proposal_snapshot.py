@@ -52,7 +52,8 @@ def tensorfile(path, entries):
 
 
 @pytest.fixture
-def runtime(tmp_path, monkeypatch):
+def runtime(tmp_path, monkeypatch, request):
+    bias_mode = getattr(request, "param", "plain")
     for key, val in dict(HIDDEN=8, HEAD_DIM=4, HEADS=2, QUERIES=8).items():
         monkeypatch.setattr(obs, key, val)
     monkeypatch.setenv("SGLANG_RAGGED_VERIFY_MODE", "static")
@@ -91,9 +92,47 @@ def runtime(tmp_path, monkeypatch):
             self.variance_epsilon = 1e-5
 
         def forward(self, x):
+            if getattr(self, "_forward_method", None) is not None:
+                return self._forward_method(x)
             return F.rms_norm(
                 x.float(), (x.shape[-1],), self.weight.float(), self.variance_epsilon
             ).bfloat16()
+
+    modelslim_forward = None
+    if bias_mode != "plain":
+        # Use the ACTUAL ModelSlim wrapper bodies. The old fixture omitted
+        # this target-triggered class patch, so it missed zero bias parameters.
+        path = (
+            HERE.parents[1]
+            / "python/sglang/srt/layers/quantization/modelslim/modelslim.py"
+        )
+        functions = [
+            node
+            for node in ast.parse(path.read_text()).body
+            if isinstance(node, ast.FunctionDef)
+            and node.name in ("npu_wrapper_rmsnorm_init", "npu_wrapper_rmsnorm_forward")
+        ]
+
+        def npu_rms_norm(x, weight, eps):
+            return F.rms_norm(x.float(), (x.shape[-1],), weight.float(), eps).to(
+                x.dtype
+            ), None
+
+        namespace = {
+            "__name__": "sglang.srt.layers.quantization.modelslim.modelslim",
+            "torch": NS(
+                nn=torch.nn,
+                zeros=torch.zeros,
+                ops=NS(npu=NS(npu_rms_norm=npu_rms_norm)),
+            ),
+        }
+        tree = ast.Module(
+            body=ast.parse("from __future__ import annotations").body + functions,
+            type_ignores=[],
+        )
+        exec(compile(tree, str(path), "exec"), namespace)
+        RMSNorm.__init__ = namespace["npu_wrapper_rmsnorm_init"](RMSNorm.__init__)
+        modelslim_forward = namespace["npu_wrapper_rmsnorm_forward"](RMSNorm.forward)
 
     class Projection(torch.nn.Module):
         def __init__(self, w):
@@ -226,12 +265,14 @@ def runtime(tmp_path, monkeypatch):
         q, k, v = input.float().split(8, dim=-1)
         c, s = cos.float().view(-1, 1, 4), sin.float().view(-1, 1, 4)
 
-        def prep(x, w):
+        def prep(x, w, bias):
             x = F.rms_norm(x.reshape(-1, 2, 4), (4,), w.float(), eps)
+            if q_bias is not None:
+                x = x + bias.float()
             rot = torch.cat((-x[..., 2:], x[..., :2]), -1)
             return (rot * s + x * c).flatten(1).bfloat16()
 
-        return prep(q, q_weight), prep(k, k_weight), v.bfloat16()
+        return prep(q, q_weight, q_bias), prep(k, k_weight, k_bias), v.bfloat16()
 
     dflash_module = types.ModuleType(obs.DFLASH)
     dflash_module.__file__ = str(HERE / "test_proposal_snapshot.py")
@@ -286,6 +327,11 @@ def runtime(tmp_path, monkeypatch):
     model = type("DSparkDraftModel", (torch.nn.Module,), {})()
     model.layers = torch.nn.ModuleList([Layer()])
     model.embed_tokens = torch.nn.Embedding.from_pretrained(embedding)
+    if modelslim_forward is not None:
+        for norm in (model.layers[0].input_layernorm, attn.q_norm, attn.k_norm):
+            norm._forward_method = types.MethodType(modelslim_forward, norm)
+            if bias_mode == "nonzero":
+                norm.bias.data.copy_(torch.linspace(-0.123, 0.219, norm.weight.numel()))
     entries = {"embed_tokens.weight": embedding}
     entries.update(
         {
@@ -779,3 +825,118 @@ def test_budget_failure_after_hook_install_does_not_leave_hooks(runtime, monkeyp
     assert r.counts["fia"] == 1 and r.counts["fused"] == 1
     assert not r.model.layers[0]._forward_pre_hooks
     assert not r.model.layers[0].input_layernorm._forward_hooks
+
+
+@pytest.mark.parametrize("runtime", ["zero", "nonzero"], indirect=True)
+def test_actual_modelslim_bias_wrappers_are_captured_and_replayed(runtime):
+    r = runtime
+    originals = {
+        name: p.detach().clone()
+        for name, p in r.model.named_parameters()
+        if name.endswith("bias")
+    }
+    snap = run(r)
+    assert snap["status"] == "PROPOSAL_SNAPSHOT_COLLECTED", snap["errors"]
+    assert snap["fused_bias_enabled"]
+    assert snap["input_norm_reference_mode"] == "modelslim_bias_after_norm_store"
+    result = probe.compare_snapshot(r.root)
+    assert result["structural_issues"] == []
+    assert r.counts["fused"] == r.counts["fia"] == 1
+    arrays = probe.Arrays(r.root, snap, r.config["max_bytes"])
+    for name, actual in (
+        ("input_norm_bias", r.model.layers[0].input_layernorm.bias),
+        ("q_norm_bias", r.model.layers[0].self_attn.q_norm.bias),
+        ("k_norm_bias", r.model.layers[0].self_attn.k_norm.bias),
+    ):
+        assert snap["bias"][name]["present"]
+        assert snap["bias"][name]["nonzero_count"] == int(torch.count_nonzero(actual))
+        np.testing.assert_array_equal(arrays.get(name), actual.detach().numpy())
+    assert result["comparisons"]["norm_same_input_bf16_storage"]["exact_equal"]
+    for label in ("q", "k", "v"):
+        comparison = result["comparisons"][f"fused_{label}_same_input_bf16_storage"]
+        assert comparison["exact_equal"]
+    # Saving and observing must not clear a real bias or disable the original path.
+    for name, parameter in r.model.named_parameters():
+        if name in originals:
+            assert torch.equal(parameter, originals[name])
+    assert not r.model.layers[0].input_layernorm._forward_hooks
+
+
+def test_nonzero_bias_reference_respects_distinct_store_boundaries():
+    x = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+    weight = np.array([0.71, 0.83, 0.91, 1.11], dtype=np.float32)
+    bias = np.array([0.005, -0.003, 0.007, -0.009], dtype=np.float32)
+    tx, tw, tb = map(torch.from_numpy, (x, weight, bias))
+    math, stored = ref.input_norm(
+        x, weight, 1e-5, bias=bias, mode="modelslim_bias_after_norm_store"
+    )
+    normalized = F.rms_norm(tx, (4,), tw, 1e-5)
+    expected = (normalized.bfloat16().float() + tb).bfloat16()
+    torch.testing.assert_close(torch.from_numpy(math), normalized + tb)
+    np.testing.assert_array_equal(stored, expected.float().numpy())
+    # This fixture detects incorrectly fusing the two stores into one.
+    assert not np.array_equal(stored, (normalized + tb).bfloat16().float().numpy())
+
+
+@pytest.mark.parametrize("bias_kind", ["zero", "nonzero", "k_only"])
+def test_native192_bias_fusion_against_torch(bias_kind):
+    rng = torch.Generator().manual_seed(84)
+    qkv = torch.randn(8, 3 * 4 * 192, generator=rng).bfloat16().float()
+    qw, kw = [torch.randn(192, generator=rng).bfloat16().float() for _ in range(2)]
+    angles = torch.randn(8, 96, generator=rng)
+    cos = angles.cos().bfloat16().float().repeat(1, 2)
+    sin = angles.sin().bfloat16().float().repeat(1, 2)
+    qb = (
+        None
+        if bias_kind == "k_only"
+        else (
+            torch.zeros(192) if bias_kind == "zero" else torch.randn(192, generator=rng)
+        )
+    )
+    kb = torch.zeros(192) if bias_kind == "zero" else torch.randn(192, generator=rng)
+    result = ref.fused_prepare(
+        qkv.numpy(),
+        qw.numpy(),
+        kw.numpy(),
+        cos.numpy(),
+        sin.numpy(),
+        1e-5,
+        4,
+        192,
+        bf16_storage=True,
+        q_bias=None if qb is None else qb.numpy(),
+        k_bias=kb.numpy(),
+    )
+    q, k, v = qkv.reshape(8, 3, 4, 192).unbind(1)
+    for actual, value, weight, bias in zip(result[:2], (q, k), (qw, kw), (qb, kb)):
+        norm = F.rms_norm(value, (192,), weight, 1e-5)
+        if qb is not None:
+            norm = norm + bias
+        a, b = norm.chunk(2, dim=-1)
+        c, s = cos[:, None, :96], sin[:, None, :96]
+        expected = torch.cat((a * c - b * s, b * c + a * s), dim=-1).bfloat16()
+        # PyTorch's default BF16 assertion contract, solely CPU calibration.
+        torch.testing.assert_close(torch.from_numpy(actual).bfloat16(), expected)
+    np.testing.assert_array_equal(result[2], v.numpy())
+
+
+@pytest.mark.parametrize("runtime", ["zero"], indirect=True)
+def test_unknown_bias_norm_is_not_silently_treated_as_plain(runtime):
+    r = runtime
+    norm = r.model.layers[0].input_layernorm
+    original = norm._forward_method
+
+    def alternate(x):
+        return original(x)
+
+    norm._forward_method = alternate
+    snap = run(r)
+    assert snap["status"] == "PROPOSAL_SNAPSHOT_COLLECTED"
+    result = probe.compare_snapshot(r.root)
+    assert result["input_norm_reference_mode"] == "uncovered"
+    assert "norm_same_input_math" not in result["comparisons"]
+    assert (
+        "composed_preparation_actual_context_attention_bf16_storage"
+        not in result["comparisons"]
+    )
+    assert result["attention_replay"] == "SAME_ACTUAL_INPUTS_COMPARED"

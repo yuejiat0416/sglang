@@ -43,12 +43,24 @@ def slot_contract(expected, actual, current, prefix):
 
 
 def fused_prepare(
-    qkv, q_weight, k_weight, cos, sin, eps, heads, head_dim, *, bf16_storage
+    qkv,
+    q_weight,
+    k_weight,
+    cos,
+    sin,
+    eps,
+    heads,
+    head_dim,
+    *,
+    bf16_storage,
+    q_bias=None,
+    k_bias=None,
 ):
     """Current host's full-head NeoX path: FP32 norm+RoPE, ONE output cast.
 
     Unlike the stacked context path, there is no BF16 store between norm and
     RoPE. Cache values are supplied as actually consumed; do not regenerate them.
+    The existing host enables BOTH bias additions with q_bias is not None.
     """
     x = np.asarray(qkv, dtype=np.float32)
     if x.ndim != 2 or x.shape[1] != 3 * heads * head_dim:
@@ -59,14 +71,41 @@ def fused_prepare(
         raise ValueError("Expected full-head sin/cos")
     q, k, v = [part.reshape(t, heads, head_dim) for part in np.split(x, 3, axis=-1)]
 
-    def prepare(a, weight):
+    use_bias = q_bias is not None
+    if use_bias and (
+        np.shape(q_bias) != (head_dim,) or np.shape(k_bias) != (head_dim,)
+    ):
+        raise ValueError("Enabled host bias requires Q and K vectors of head_dim")
+
+    def prepare(a, weight, bias):
         n = rms_norm(a, weight, eps)
+        if use_bias:
+            n = n + np.asarray(bias, dtype=np.float32)
         half = head_dim // 2
         rotated = np.concatenate((-n[..., half:], n[..., :half]), axis=-1)
         value = rotated * s[:, None, :] + n * c[:, None, :]
         return bf16_round(value) if bf16_storage else value
 
-    return prepare(q, q_weight), prepare(k, k_weight), v.copy()
+    return prepare(q, q_weight, q_bias), prepare(k, k_weight, k_bias), v.copy()
+
+
+def input_norm(values, weight, eps, *, bias=None, mode="plain_rmsnorm"):
+    """Separate mathematical output and current NPU storage-boundary emulation.
+
+    ModelSlim's no-residual wrapper receives the already-stored npu_rms_norm
+    output, then adds bias, then casts to input dtype. This is different from
+    the fused Q/K path, which adds bias before its only output cast.
+    """
+    math = rms_norm(values, weight, eps)
+    stored = bf16_round(math)
+    if mode == "modelslim_bias_after_norm_store":
+        if np.shape(bias) != np.shape(weight):
+            raise ValueError("Expected ModelSlim input-norm bias vector")
+        b = np.asarray(bias, dtype=np.float32)
+        return math + b, bf16_round(stored + b)
+    if mode != "plain_rmsnorm":
+        raise ValueError("Uncovered input norm implementation")
+    return math, stored
 
 
 def attention(q, k, v, scale, *, visible=None, compute_dtype=np.float64):

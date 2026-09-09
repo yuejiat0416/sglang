@@ -15,6 +15,31 @@ It is separate from the SGLang feature commits intended for upstream review.
 这不是接受率修复、精度验收或性能测试；取样会额外同步，耗时不能用于性能结论。
 本轮所有工具、测试和文档仅留 `sync/glm52-dspark-ms1`，不进入正式PR分支。
 
+### 本轮工具修正：`Bias path not covered`
+
+该错误来自上一版observer要求Q/K bias必须为None；已有融合算子支持bias，
+工具遗漏了此输入合同。ModelSlim在target量化描述包含norm.bias时会包装RMSNorm，
+新增零初始化的bias参数；因此后建草稿即使未量化也可能带该参数。
+参数存在不等于实际值非零，更不等于接受率根因；以本轮快照的实际值为准。
+
+本轮只修临时工具：记录首层input norm和Q/K实际bias，输出存在性、shape、dtype、
+非零数量及有限性；按现有host的`q_bias is not None`记录bias分支。
+Q/K参考在FP32 norm乘weight后加bias，再做RoPE，最后存为BF16。
+首层input norm另按实际调用函数区分：ModelSlim无residual路径先得到已存储的
+npu_rms_norm输出，再加bias、转回输入dtype。未知的带bias norm实现标为uncovered，
+跳过该段及组合参考，但保留其余同输入Attention比较。没有把bias清零/删掉，
+也未修改模型、算子包、gamma、接受计数或容差。
+
+需要沿下面两步**重启一次诊断服务后重新采集**。失败的旧snapshot在bias检查处
+已停止观察，不能靠离线replay补出缺失数据；只重跑旧客户端还会遇到一次请求claim。
+新wrapper生成新的Evidence/RID，旧失败现场保留。无需重建容器、更新kernel或安装包。
+
+源码依据：[ModelSlim添加bias及执行顺序](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/layers/quantization/modelslim/modelslim.py:48)、
+[融合host的bias开关](/Users/yuejiat/workspace/model-inference/worktrees/sgl-kernel-npu-glm52-dspark-ms1-sync/python/sgl_kernel_npu/sgl_kernel_npu/norm/split_qkv_rmsnorm_rope.py:411)、
+[融合内部加bias](/Users/yuejiat/workspace/model-inference/worktrees/sgl-kernel-npu-glm52-dspark-ms1-sync/python/sgl_kernel_npu/sgl_kernel_npu/norm/split_qkv_rmsnorm_rope.py:65)。
+仍对应下方11.5草稿Attention准备阶段，修工具覆盖不代表新的DSpark功能或模型修复。
+[本次修正diff与验证](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-09-proposal-bias-observer-fix/README.md)。
+
 ### 执行前先理解本轮记录什么
 
 1. **输入与加载**：anchor+7个mask对应的实际embedding，以及首层局部QKV权重；

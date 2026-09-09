@@ -218,6 +218,47 @@ class Capture(ArrayCapture):
         )
         self.save("norm_input", inputs[0])
         self.save("norm_output", output)
+        norm = self.layer.input_layernorm
+        self.record_bias("input_norm_bias", getattr(norm, "bias", None))
+        # Dispatch is resolved by the ORIGINAL call before this hook. Do not
+        # force a different implementation based just on the presence of bias.
+        function = getattr(norm, "_forward_method", None) or norm.forward
+        function = inspect.unwrap(function)
+        module_name = function.__module__
+        qualname = function.__qualname__
+        self.report["input_norm_dispatch"] = {
+            "module": module_name,
+            "qualname": qualname,
+        }
+        source(
+            self.report, "actual_input_norm_forward", inspect.getsourcefile(function)
+        )
+        if (
+            module_name == "sglang.srt.layers.quantization.modelslim.modelslim"
+            and qualname == "npu_wrapper_rmsnorm_forward.<locals>._rmsnorm_forward_oot"
+        ):
+            mode = "modelslim_bias_after_norm_store"
+        elif getattr(norm, "bias", None) is None or (
+            module_name == "sglang.srt.layers.layernorm"
+            and qualname == "RMSNorm.forward_npu"
+        ):
+            mode = "plain_rmsnorm"
+        else:
+            mode = "uncovered"
+        self.report["input_norm_reference_mode"] = mode
+
+    def record_bias(self, name, tensor):
+        info = {"present": tensor is not None}
+        self.report.setdefault("bias", {})[name] = info
+        if tensor is None:
+            return
+        saved = self.save(name, tensor)
+        info.update(
+            shape=list(saved.shape),
+            dtype=str(saved.dtype),
+            nonzero_count=int((saved != 0).sum().item()),
+            finite=bool(saved.isfinite().all().item()),
+        )
 
     def qkv_boundary(self, inputs, output):
         self.save("qkv_input", inputs[0])
@@ -249,10 +290,9 @@ class Capture(ArrayCapture):
             "Unexpected fused layout",
         )
         require(values["is_neox_style"] is True, "Only actual full NeoX path covered")
-        require(
-            values["q_bias"] is None and values["k_bias"] is None,
-            "Bias path not covered",
-        )
+        self.record_bias("q_norm_bias", values["q_bias"])
+        self.record_bias("k_norm_bias", values["k_bias"])
+        self.report["fused_bias_enabled"] = values["q_bias"] is not None
         self.report["fused_eps"] = float(values["eps"])
         self.report["fused_neox"] = values["is_neox_style"]
         for name, key in (
