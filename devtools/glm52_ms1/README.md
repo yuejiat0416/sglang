@@ -5,6 +5,27 @@ It is separate from the SGLang feature commits intended for upstream review.
 
 ## 当前轮：固定 token 前缀，核对 Target prefill 与历史 verify
 
+**2026-09-09实机更新：首次请求触发输入logprob融合算子编译崩溃。**
+`row_logsumexp_topk → bishengir-compile`在Ascend910_9362上SIGSEGV，
+服务随后退出。本次没有取得prefill/verify对照结果。之前“现有服务无需重启”
+只适用于未发生故障的准备状态；本次需恢复服务。
+
+使用社区已有开关关闭输入logprob的快速实现，保留log_softmax/top-k备用计算；
+在**服务端终端**运行以下启动命令，原已成功配置的其他参数保持：
+
+```bash
+cd /home/tyj/glm52/sglang
+SGLANG_ENABLE_FAST_INPUT_LOGPROBS=0 \
+SGLANG_NPU_GLM_DSPARK_QUAROT=original \
+SGLANG_DSPARK_DEBUG_DUMP=core,reqs \
+bash devtools/glm52_ms1/single_dspark_static.sh
+```
+
+等待服务ready后，再在另一个终端运行下方客户端命令。该开关在服务构造
+InputLogprobProcessor时读取，只在客户端设置无效；本轮不改运行源码、权重、
+kernel或默认启动脚本。输入分数计算有额外开销，不拿恢复后的诊断延迟作性能
+结论。现有原请求/失败Evidence保留，新执行会写新的Evidence目录。
+
 已有12请求总接受率为27.72%。这一轮继续定位原因：把同一轮的完整前缀、
 anchor和draft候选固定下来，看Target重新prefill得到的预测与历史verify决定
 是否一致。它不是提接受率的新补丁，也不是独立target-only精度或压测。
@@ -24,7 +45,8 @@ python3 devtools/glm52_ms1/probe_verify_prefill.py --source /home/tyj/glm52-ms1/
 ```
 
 不带`--run`时只读取旧证据、准备`plan.json`，不联系服务。不要将`--source`
-指向套件总目录，需要指向上述单请求子目录。无需安装依赖或重新启动模型。
+指向套件总目录，需要指向上述单请求子目录。服务按上方恢复后，运行客户端
+无需安装依赖或再次重启模型；恢复开关本身不需要更新代码。
 脚本在model采样默认模式下只读当前target的`generation_config.json`，确认
 没有repetition penalty等干扰；文件和历史加载版本未变仍是比较前提。
 
