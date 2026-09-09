@@ -1,0 +1,53 @@
+{
+  "suite_id": "glm52-static-quarot-diagnostic-v1",
+  "max_tokens": 512,
+  "repeats": 2,
+  "expected_server_configuration": {
+    "device": "npu",
+    "speculative_algorithm": "DSPARK",
+    "model_path": "/workspace/weight/GLM-5.2-w8a8",
+    "speculative_draft_model_path": "/workspace/weight/GLM-5.2-DSpark-NPU-0805",
+    "tp_size": 16,
+    "dp_size": 1,
+    "nnodes": 1,
+    "disable_cuda_graph": true
+  },
+  "cases": [
+    {
+      "id": "sky_baseline",
+      "category": "既有请求复现",
+      "prompt": "请用三句话解释为什么天空看起来是蓝色的。",
+      "manual_review": "检查解释是否围绕太阳光散射展开、事实是否合理，以及可见回答是否完成三句话。"
+    },
+    {
+      "id": "zh_memory_storage",
+      "category": "中文知识说明",
+      "prompt": "请用不超过四句话向初学者解释计算机内存和硬盘的区别，说明它们分别保存什么，以及断电后会怎样。",
+      "manual_review": "检查是否正确区分运行时内存与持久存储、说明断电影响，并完成所要求的简短解释。"
+    },
+    {
+      "id": "en_dns",
+      "category": "英文说明",
+      "prompt": "In no more than four sentences, explain to a beginner what DNS does when they open a website and why a browser may use a cached DNS result.",
+      "manual_review": "检查英文回答是否正确解释域名解析与缓存作用，表达是否连贯且任务是否完成。"
+    },
+    {
+      "id": "python_unique",
+      "category": "Python 小函数",
+      "prompt": "请编写 Python 函数 unique_in_order(items: list[str]) -> list[str]，去除重复字符串并保留首次出现的顺序，不修改输入列表。给出函数代码，再用一个含重复项的输入展示返回结果。",
+      "manual_review": "人工检查代码是否保持首次出现顺序、不修改输入，并核对示例结果；采集工具不执行生成代码。"
+    },
+    {
+      "id": "inventory_rules",
+      "category": "规则算术与推理",
+      "prompt": "仓库最初有120件物品。先发出40件，再收到28件；随后发出当时库存的四分之一；最后仅当剩余库存少于90件时补入15件。请按此顺序列出每一步的库存，并给出最终数量。",
+      "manual_review": "独立核算各步应为80、108、81、96，检查四分之一的计算基数、条件判断和最终数量。"
+    },
+    {
+      "id": "notes_summary",
+      "category": "短文本摘要与抽取",
+      "prompt": "请把以下记录概括成一句话，再列出待办事项、负责人和截止时间；没有写明的信息标为“未说明”，不要补充猜测。记录：项目组周一完成了接口文档初稿。评审发现两个字段缺少示例，由李明在周三下午三点前补充。王芳负责安排下一次评审，具体时间尚未确定。",
+      "manual_review": "检查摘要是否忠实，是否对应两项待办及负责人，并将未确定的评审时间明确标为未说明。"
+    }
+  ]
+}

@@ -252,18 +252,29 @@ def analyze_trace(server_info, response, rid):
     return summary, {"candidate_api_prefix": prefix, "additional_worker_rows": rows[n:]}
 
 
-def collect(url, output, max_tokens, timeout=600, opener=None):
+def collect(
+    url,
+    output,
+    max_tokens,
+    timeout=600,
+    opener=None,
+    *,
+    prompt=PROMPT,
+    validate_server=None,
+):
     # Match the existing curl --noproxy '*' request, independently of user proxy env.
     opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}))
     url = url.rstrip("/")
     before = request_json(opener, url + "/server_info", timeout=timeout)
     write_json(output / "server_info.before.json", before)
     check_recording(before)
+    if validate_server is not None:
+        validate_server(before)
     rid = "ms1-trace-" + uuid.uuid4().hex
     payload = {
         "rid": rid,
         "model": "GLM-5.2-w8a8",
-        "messages": [{"role": "user", "content": PROMPT}],
+        "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
         "max_tokens": max_tokens,
         "stream": False,
@@ -276,6 +287,8 @@ def collect(url, output, max_tokens, timeout=600, opener=None):
     write_json(output / "response.json", response)
     after = request_json(opener, url + "/server_info", timeout=timeout)
     write_json(output / "server_info.after.json", after)
+    if validate_server is not None:
+        validate_server(after)
     summary, trace = analyze_trace(after, response, rid)
     write_json(output / "trace.json", trace)
     write_json(output / "summary.json", summary)

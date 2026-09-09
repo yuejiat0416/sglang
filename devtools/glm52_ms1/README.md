@@ -3,7 +3,63 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
-## 当前轮：GLM NPU QuaRot 加载候选与真实请求
+## 当前轮：固定多输入、较长输出的接受率诊断
+
+QuaRot加载日志及原64-token请求已核对：16rank完成FC转换，草稿使用自有
+embedding/head，接受率由2.36%改善至28.95%。本轮保持当前服务，检查改善
+是否跨内容稳定，以及回答是否完整；不是正式业务数据集或性能压测。
+
+固定用例在 `acceptance-cases.json`：天空问题（原提示词）、中文内存/硬盘说明、
+英文DNS说明、Python去重函数、规则库存算术、记录摘要。先按此顺序执行
+一轮，再以相同顺序执行第二轮，共12条串行请求。每条 `temperature=0`、
+`max_tokens=512`，允许自然结束；没有增加system消息或thinking开关。
+512是本轮诊断预算，不保证模型一定答完；不按结果重跑或挑选样本。
+
+**当前服务继续运行。** 本轮更新仅在devtools，另一个容器终端执行：
+
+```bash
+cd /home/tyj/glm52/sglang
+git pull --ff-only
+python3 devtools/glm52_ms1/collect_acceptance_suite.py
+```
+
+该命令发HTTP请求，不启动模型、不改服务配置、不重建容器。沿用当前
+static/eager、TP16/DP1、gamma8/verify9、original与core,reqs。采集前后核对
+固定用例文件里的服务配置，避免请求误发到不同配置却被当作本轮结果。
+模型/kernel代码不变，服务无需重启；客户端的git SHA不冒充运行服务的SHA。
+
+每条会输出A/P/N、接受率和结束原因，全部可信完成后才输出
+`SUITE_COLLECTED` 和 `Aggregate`。整体使用 `sum(A)/sum(P)`，不平均各请求
+百分比；其中严格>0.5只是对用户参考门槛的观察，不能据开发小样本宣布转测通过。
+
+所有证据保存在打印的 `Evidence` 目录：
+
+- `suite-plan.json`、`collector.json`：冻结用例、参数、客户端来源和文件指纹。
+- 每请求子目录：原始请求/响应、前后server_info、逐轮trace、summary和套件记录。
+- `suite-summary.json`：整体与逐条结果、未执行请求、重复输出token是否一致、缓存数。
+- `responses.md`：按原顺序排列完整回答及人工审视要点；不会执行模型生成的代码。
+
+两轮之间不清缓存或统计；重复请求可命中缓存，缓存数单独记录。逐轮数据按
+独立rid筛选，旧请求不累入本次A/P/N。server_info导出包含保留历史并可能等待
+数据拷贝完成，有采集开销，本轮延时不作为性能基线。
+
+若超时、Ctrl+C、服务配置变化或记录核对失败，工具保留已获得的证据，停止
+后续请求，不自动重试。`SUITE_INCOMPLETE` 不提供整套接受率，不能只拿已成功
+的部分宣布通过；无投机轮时标记 `NO_SPECULATIVE_ROUNDS`，不记成0%或模型错误。
+HTTP超时/中断不保证服务端请求已结束，先保留现场，不立刻重新执行整套。
+
+`length`表示用完输出预算，保留回答待人工判断完整性；`stop`也不自动代表内容
+正确。`Output token match`仍仅是同一DSpark请求内部记录核对，不是target-only对拍。
+
+请回传终端汇总、`suite-summary.json` 和 `responses.md`。若有异常，保留对应
+请求子目录，先判断是记录/服务问题，还是模型输出问题；不改变block或统计分母。
+若多个输入均稳定改善，继续多输入正确性和后续部署验证；若普遍偏低，下一步
+审视真实hidden→FC/hidden_norm及草稿/verify对照方案；若仅某类输入偏低，先查
+任务配对与具体输出；不能仅凭本轮结果盲改192、Q尺度或epsilon。
+
+实际diff和验证范围见[本轮交付](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-09-acceptance-suite/README.md)。
+
+## Previous：GLM NPU QuaRot 加载候选与真实请求
 
 本轮把前两次诊断支持的候选接入运行代码：草稿加载自身的 embedding/head，
 两个 embedding 入口都使用它们；原始 FC 在加载时以 CPU FP32 分块右乘
