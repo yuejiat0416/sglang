@@ -3,6 +3,88 @@
 This directory supports the temporary `sync/glm52-dspark-ms1` development branch.
 It is separate from the SGLang feature commits intended for upstream review.
 
+## Current diagnosis: sampled QuaRot vocabulary weights (CPU only)
+
+The ordered trace shows low acceptance from the start. The target export records
+QuaRot and provides `global_rotation` as F32 `[6144, 6144]`; its separate
+`rot.weight` is BF16 with the same shape. These headers identify the inputs, but
+do not prove that the target and draft weights use compatible coordinates.
+This step compares a few embedding/head rows on disk. Unlike the earlier trace
+collector, it does not send requests or inspect the running service.
+
+This delivery changes only `probe_quarot_vocab.py`, its CPU test, and this README.
+After fetching the delivered commit, inspect its file list with
+`git show --stat <delivered-commit>` before updating the checkout. If the update
+contains only these three files, keep the service running: the stop/restart
+instructions in the older sections below do not apply to this tool-only update.
+Updates containing runtime or launch changes need their own restart instructions.
+
+In the current container, from `/home/tyj/glm52/sglang`, run:
+
+```bash
+python3 devtools/glm52_ms1/probe_quarot_vocab.py
+```
+
+Defaults are target `/workspace/weight/GLM-5.2-w8a8`, draft
+`/workspace/weight/GLM-5.2-DSpark-NPU-0805`, 32 evenly spaced token IDs plus valid
+mask/special IDs from the configs (deduplicated), and one CPU thread.
+The tool uses the Python standard library and NumPy, without importing Torch,
+using an NPU, installing dependencies, or accessing the network. It reads only
+selected vocabulary rows, the full Q (144 MiB), and the full R (72 MiB, converted
+to F32 for calculation). Expect several hundred MiB plus Python/BLAS overhead;
+the CPU thread limit does not eliminate shared CPU or memory-bandwidth usage.
+It does not modify model files, runtime/kernel code, or launch parameters.
+
+Optional arguments are `--target`, `--draft`, `--out` (evidence parent directory),
+`--samples 32`, `--token-ids '0,1,154856'`, and `--threads 1`. Each run creates a
+new `quarot-vocab-<UTC-time>-<uuid>/` directory below
+`/home/tyj/glm52-ms1/evidence/` by default. Return the terminal summary and
+`report.json`; retain the complete evidence directory on the server.
+Explicit token IDs replace the automatic selection. This diagnostic limits the
+total selection to 256 unique IDs to keep vocabulary reads bounded.
+
+For matching token rows, the comparisons are:
+
+| Boundary | Candidates compared with the target row |
+|---|---|
+| Embedding | Original draft row; `E_draft @ Q` |
+| LM head | Original draft row; `W_draft @ Q`; `(W_draft @ Q) @ R` |
+
+The last candidate tests the export contract `R = Q.T @ D_gamma @ Q`, where
+`D_gamma` contains the original target final-norm scales. It is not an inverse
+rotation. This round requires both Q and R, whose presence was already confirmed
+in the current target directory. Since R is stored in BF16, this candidate has additional rounding
+error compared with an export computed from higher-precision inputs. No inverse,
+full gamma reconstruction, fitted correction, or cosine pass threshold is used.
+
+| Result | Meaning and next decision |
+|---|---|
+| `COORDINATE_COMPARISON_COLLECTED` | Calculations completed, not a correctness PASS. Review per-row errors across the predefined candidates. A consistent coordinate relation supports investigating that contract; if none explains the rows, check export provenance and weight pairing before changing inference. |
+| `NUMERICAL_REVIEW_REQUIRED` | A numerical anomaly, such as a non-finite value, needs review. Keep the evidence and resolve it before interpreting coordinate comparisons. |
+| `FAILED` | An input or tool operation failed. Review the reported error first; this is not evidence that the model itself is incorrect. |
+
+Sampled agreement does not verify every weight, the draft FC, actual target
+hidden states, model quality, acceptance, or performance. In particular, the
+five captured target residuals are a different interface from NEXTN's final
+hidden state; neither this test nor a matching head authorizes applying R to
+those five features. The existing 192-dimensional fusion stays unchanged.
+
+Source context: dense DSpark shares target vocabulary modules in
+[`attach_shared_modules`](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/models/dspark.py:514),
+while its target features enter
+[`project_target_hidden`](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/models/dflash.py:662).
+Learning sections
+[26.4: checkpoint/loader contract](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4443)
+and [27.3: hidden-state contract](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4583)
+explain the two boundaries; the guide is a conceptual reference from an older
+code snapshot, not proof of this export's transformations.
+
+CPU tool checks (no model startup):
+
+```bash
+python3 devtools/glm52_ms1/test_probe_quarot_vocab.py -v
+```
+
 ## 当前排查第1步：接受率的逐轮顺序
 
 已有真实请求53轮、10个草稿token接受，总接受率约2.36%；48轮在第一个草稿
