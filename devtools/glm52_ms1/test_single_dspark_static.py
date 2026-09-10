@@ -16,7 +16,7 @@ REPO = SCRIPT.parents[2]
 
 
 class SingleDSparkStaticTests(unittest.TestCase):
-    def run_script(self, *args, overrides=None):
+    def run_script(self, *args, overrides=None, legacy=True):
         environment = os.environ.copy()
         for key in (
             "MODE",
@@ -30,6 +30,10 @@ class SingleDSparkStaticTests(unittest.TestCase):
             "MS1_STATE",
             "BASH_ENV",
             "SERVED_MODEL_NAME",
+            "SGLANG_REPO",
+            "CONTEXT_LENGTH",
+            "MAX_TOTAL_TOKENS",
+            "GLM52_LEGACY_LAUNCH",
         ):
             environment.pop(key, None)
         environment["PYTHONPATH"] = "/existing/python/path"
@@ -38,8 +42,13 @@ class SingleDSparkStaticTests(unittest.TestCase):
             MS1_STATE="/test/run-state",
             TARGET_MODEL="/test/checkpoints/target",
             DRAFT_MODEL="/test/checkpoints/draft",
+            SGLANG_REPO=str(REPO),
+            KERNEL_REPO="/test/kernel",
+            SERVED_MODEL_NAME="test-model",
         )
         environment.update(overrides or {})
+        if legacy:
+            environment["GLM52_LEGACY_LAUNCH"] = "1"
         return subprocess.run(
             ["bash", str(SCRIPT), *args],
             cwd="/",
@@ -83,7 +92,7 @@ class SingleDSparkStaticTests(unittest.TestCase):
         self.assertEqual(
             command[:2], ["python3", str(SCRIPT.with_name("with_kernel_checkout.py"))]
         )
-        self.assert_option(command, "--kernel-repo", f"{REPO}/../sgl-kernel-npu")
+        self.assert_option(command, "--kernel-repo", "/test/kernel")
         self.assert_option(command, "--state-dir", "/test/run-state")
         args = self.server_args(command)
         expected = {
@@ -97,7 +106,8 @@ class SingleDSparkStaticTests(unittest.TestCase):
             "--max-prefill-tokens": 69632,
             "--mem-fraction-static": 0.85,
             "--max-running-requests": 8,
-            "--served-model-name": "model",
+            "--served-model-name": "test-model",
+            "--context-length": 16384,
             "--quantization": "modelslim",
             "--moe-a2a-backend": "deepep",
             "--deepep-mode": "auto",
@@ -117,6 +127,8 @@ class SingleDSparkStaticTests(unittest.TestCase):
             "--enable-dp-attention",
             "--trust-remote-code",
             "--disable-cuda-graph",
+            "--enable-metrics",
+            "--enable-cache-report",
         ):
             self.assertEqual(args.count(flag), 1)
         self.assertNotIn("--cuda-graph-bs", args)
@@ -147,7 +159,18 @@ class SingleDSparkStaticTests(unittest.TestCase):
                 "https_proxy",
                 "HTTP_PROXY",
                 "HTTPS_PROXY",
+                "ALL_PROXY",
+                "all_proxy",
                 "ASCEND_LAUNCH_BLOCKING",
+                "SGLANG_NPU_GLM_DSPARK_QUAROT",
+                "SGLANG_DSPARK_DEBUG_DUMP",
+                "GLM52_CONTEXT_SNAPSHOT_CONFIG",
+                "GLM52_PROPOSAL_SNAPSHOT_CONFIG",
+                "SGLANG_SIMULATE_ACC_LEN",
+                "SGLANG_SIMULATE_ACC_METHOD",
+                "SGLANG_SIMULATE_ACC_TOKEN_MODE",
+                "SGLANG_SIMULATE_UNIFORM_EXPERTS",
+                "SGLANG_SIMULATE_ROUND_ROBIN_EXPERTS",
             },
         )
 
@@ -172,6 +195,9 @@ class SingleDSparkStaticTests(unittest.TestCase):
                     else:
                         expected.append(item)
                 self.assertEqual(self.server_args(target_command), expected)
+                self.assertEqual(
+                    draft_env.pop("SGLANG_NPU_GLM_DSPARK_QUAROT"), "original"
+                )
                 self.assertEqual(draft_env, target_env)
 
     def test_nextn_preserves_working_recipe_without_dspark_arguments(self):
@@ -226,10 +252,10 @@ class SingleDSparkStaticTests(unittest.TestCase):
                     enabled = self.printed_command(
                         MODE=mode, GRAPH=graph, ENABLE_METRICS="1"
                     )
-                    self.assertEqual(default, disabled)
+                    self.assertEqual(default, enabled)
                     self.assertEqual(enabled[:2], default[:2])
-                    self.assertEqual(enabled[2], [*default[2], "--enable-metrics"])
-                    self.assertNotIn("--enable-metrics", default[2])
+                    self.assertEqual(enabled[2], [*disabled[2], "--enable-metrics"])
+                    self.assertNotIn("--enable-metrics", disabled[2])
 
     def test_print_is_side_effect_free_and_preserves_quoted_overrides(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -375,17 +401,86 @@ class SingleDSparkStaticTests(unittest.TestCase):
         self.assertEqual(self.run_script("--unknown").returncode, 2)
         self.assertEqual(self.run_script("--print-command", "extra").returncode, 2)
 
-    def test_empty_required_local_settings_stop_before_launch(self):
+    def test_empty_environment_uses_editable_defaults_without_prerequisites(self):
         for key in ("MS1_HOST", "MS1_STATE", "TARGET_MODEL", "DRAFT_MODEL"):
             with self.subTest(key=key):
-                result = self.run_script("--print-command", overrides={key: ""})
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(key, result.stderr)
-                self.assertEqual(result.stdout, "")
+                result = self.run_script(
+                    "--print-command", overrides={key: ""}, legacy=False
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
         result = self.run_script(
             "--print-command", overrides={"MODE": "target-only", "DRAFT_MODEL": ""}
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_direct_launch_ignores_stale_deployment_and_removes_simulation_env(self):
+        result = self.run_script(
+            "--print-command",
+            overrides={
+                "MODE": "target-only",
+                "GRAPH": "1",
+                "MS1_HOST": "192.0.2.99",
+                "SGLANG_SIMULATE_ACC_LEN": "8",
+                "SGLANG_DSPARK_DEBUG_DUMP": "core",
+            },
+            legacy=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = shlex.split(result.stdout)
+        self.assert_option(argv, "--speculative-algorithm", "DSPARK")
+        self.assert_option(argv, "--host", "61.47.19.71")
+        self.assertIn("--disable-cuda-graph", argv)
+        self.assertIn("SGLANG_SIMULATE_ACC_LEN", argv)
+        self.assertNotIn("SGLANG_SIMULATE_ACC_LEN=8", argv)
+
+    def test_snapshot_terminal_is_rejected_before_helper(self):
+        for overrides in (
+            {"GLM52_CONTEXT_SNAPSHOT_CONFIG": "/test/config.json"},
+            {"GLM52_PROPOSAL_SNAPSHOT_CONFIG": "/test/config.json"},
+            {"PYTHONPATH": "/test/proposal-snapshot-id/bootstrap"},
+        ):
+            with self.subTest(overrides=overrides):
+                result = self.run_script("--print-command", overrides=overrides)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("snapshot", result.stderr)
+                self.assertFalse(result.stdout)
+
+    def test_no_environment_defaults_and_literal_switch_edits(self):
+        source = SCRIPT.read_text()
+        self.assertIn("MODE='dspark'", source)
+        self.assertIn("GRAPH=0", source)
+        clean = {
+            key: value for key, value in os.environ.items() if key in ("PATH", "HOME")
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            copied = Path(directory) / "launch.sh"
+            copied.write_text(
+                source.replace("MODE='dspark'", "MODE='target-only'").replace(
+                    "GRAPH=0 ", "GRAPH=1 "
+                )
+            )
+            result = subprocess.run(
+                ["bash", str(copied), "--print-command"],
+                env=clean,
+                text=True,
+                capture_output=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = shlex.split(result.stdout)
+        self.assert_option(args, "--model-path", "/home/weights/GLM-5.2-w8a8")
+        self.assert_option(args, "--state-dir", "/home/tyj/glm52-ms1")
+        self.assert_option(args, "--kernel-repo", "/home/tyj/glm52/sgl-kernel-npu")
+        self.assert_option(args, "--host", "61.47.19.71")
+        self.assert_option(args, "--cuda-graph-bs", 16)
+        self.assertNotIn("--speculative-algorithm", args)
+        self.assertNotIn("--disable-cuda-graph", args)
+
+    def test_optional_capacity_override_is_explicit(self):
+        _, _, command = self.printed_command(
+            CONTEXT_LENGTH="133120", MAX_TOTAL_TOKENS="140000"
+        )
+        self.assert_option(command, "--context-length", 133120)
+        self.assert_option(command, "--max-total-tokens", 140000)
 
     def test_bash_syntax_and_help(self):
         result = subprocess.run(

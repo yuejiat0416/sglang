@@ -86,6 +86,8 @@ def launch_environment(
     env.pop("SGLANG_DSPARK_DEBUG_DUMP", None)
     env.pop("SGLANG_NPU_GLM_DSPARK_QUAROT", None)
     env.update(
+        GLM52_LEGACY_LAUNCH="1",
+        SGLANG_REPO=str(REPO),
         MODE="dspark"
         if mode.startswith("dspark")
         else ("nextn" if mode.startswith("nextn") else "target-only"),

@@ -1,4 +1,6 @@
-# GSP 128k/1k 三档缓存接受率用例（临时调试）
+# 历史协议附录：单机GSP非流式诊断
+
+**新机器准备和两个服务启动脚本统一见[启动手册](README.md)。本文件只保留旧工具协议，复现历史成绩时参考；不再维护独立操作步骤。**
 
 本轮在请求级比较长随机输入下的接受率及缓存条件。
 GSP是随机词表生成的合成输入，与GSM8K内容不同，不能据两者接受率差异直接判定模型bug。
@@ -31,40 +33,6 @@ GSP是随机词表生成的合成输入，与GSM8K内容不同，不能据两者
 并验证三档真实命中。原生命令1组64条可能把首批未热请求混入90%统计，
 又未按实际长度纠正分词差异，因此不能直接代替本轮三档条件检查。
 本轮不自动发起64条×3组请求，也不把单请求结果当“压测接受率>50%”准出。
-
-## NPU上怎么执行
-
-在**另一个终端、同一容器**中执行，现有服务终端保持运行。
-使用原服务Python环境，不需要EvalScope。服务地址、权重和证据目录没有内置默认值，
-从仓库外本地配置读取；与GSM8K指南使用同一组`MS1_HOST`、`MS1_PORT`、`TARGET_MODEL`、
-`MS1_STATE`和`SGLANG_REPO`变量即可。
-
-```bash
-source /SET_LOCAL_SETTINGS_FILE
-cd "$SGLANG_REPO"
-GSP_ARGS=(--host "$MS1_HOST" --port "$MS1_PORT" --target "$TARGET_MODEL" --state "$MS1_STATE")
-python3 devtools/glm52_ms1/bench_gsp_prefix.py check "${GSP_ARGS[@]}"
-```
-
-`check`只读取`/server_info`并保存preflight，不加载模型、不发送生成请求。
-`--host`、`--target`、`--state`必填；tokenizer使用同一个本地target制品，
-权重路径必须是当前容器内实际可见的路径。
-
-若显示`PREFLIGHT_READY`，执行三档：
-
-```bash
-python3 devtools/glm52_ms1/bench_gsp_prefix.py run "${GSP_ARGS[@]}"
-```
-
-也可以只测一档，例如：
-
-```bash
-python3 devtools/glm52_ms1/bench_gsp_prefix.py run --cache-hit 0 "${GSP_ARGS[@]}"
-```
-
-`run`同样先做预检，失败会在任何生成请求前停止。成功后看到每档接受率、
-实际缓存token和实际输出长度。Evidence在`$MS1_STATE/evidence/gsp-prefix-*`。
-运行产物会记录实际地址和路径，留在内网；源码仓库只保留通用工具与占位配置。
 
 ## 容量不足怎么判读
 

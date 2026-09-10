@@ -127,6 +127,8 @@ def test_modes_validate_and_launch_isolated(mode):
             mode, Path("state"), "host", 8810, "target", "draft"
         )
     assert env["GRAPH"] == str(int(mode.endswith("graph")))
+    assert env["GLM52_LEGACY_LAUNCH"] == "1"
+    assert env["SGLANG_REPO"] == str(runner.REPO)
     assert env["ENABLE_METRICS"] == "1"
     assert "SGLANG_DSPARK_DEBUG_DUMP" not in env
     assert (env.get("SGLANG_NPU_GLM_DSPARK_QUAROT") == "original") == mode.startswith(

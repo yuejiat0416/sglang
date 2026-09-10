@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# 在已建好的单机 A3/CANN 9.1 容器内运行；先修改下面的设置。
+# 在已建好的双机 A3/CANN 9.1 容器内运行；先修改下面的设置。
 set -e
 
 # 旧GSM8K工具显式启用的兼容段；直接bash运行时忽略旧终端里的部署变量。
@@ -14,15 +14,20 @@ fi
 # 只需编辑以下配置，然后直接 bash 本脚本。
 MODE='dspark'                         # dspark / target-only / nextn
 GRAPH=0                              # 0=eager；1=graph（所有 MODE 都适用）
+NODE_RANK=0                          # 71机器填0，70机器填1；两机MODE/GRAPH必须相同
 SGLANG_REPO='/home/tyj/glm52/sglang'
 KERNEL_REPO='/home/tyj/glm52/sgl-kernel-npu'
 TARGET_MODEL='/home/weights/GLM-5.2-w8a8'
 DRAFT_MODEL='/home/weights/GLM-5.2-DSpark-NPU-0805'
 MS1_STATE='/home/tyj/glm52-ms1'
-MS1_HOST='61.47.19.71'
+NODE0_HOST='61.47.19.71'
+NODE1_HOST='61.47.19.70'
+DIST_PORT=50000
+HCCL_SOCKET_IFNAME='' # 留空：自动取去对端的路由网卡；也可填写真实网卡
+GLOO_SOCKET_IFNAME='' # 留空同上；双机不能填lo
 MS1_PORT=8810
 SERVED_MODEL_NAME='GLM-5.2-w8a8'
-CONTEXT_LENGTH=16384 # 短题先用16384；128k/1k改133120并核验实际KV容量
+CONTEXT_LENGTH=133120 # 128k/1k还需核验实际KV容量；短题可改16384
 MAX_TOTAL_TOKENS=''  # 留空让runtime按显存分配；不是context长度
 ENABLE_METRICS=1     # 1=记录压测需要的服务指标
 
@@ -32,11 +37,12 @@ case "${1:-}" in
   --print-command) PRINT_COMMAND=1 ;;
   --help|-h)
     cat <<'USAGE'
-Usage: bash devtools/glm52_ms1/single_dspark_static.sh [--print-command]
+Usage: bash devtools/glm52_ms1/two_node_dspark_static.sh [--print-command]
 Edit MODE=dspark / MODE=target-only / MODE=nextn and GRAPH=0/1 at the top.
-Defaults: one node, TP16/DP1, static eager, CONTEXT_LENGTH=16384.
+Edit NODE_RANK=0 on node0 and NODE_RANK=1 on node1; run once in each container.
+Defaults: two nodes, TP32/DP8, static eager, CONTEXT_LENGTH=133120.
 ENABLE_METRICS=1 exposes service metrics; model and host paths are editable above.
---print-command only prints the command; it does not source CANN or start a server.
+--print-command does not source CANN or start a server; empty NIC settings read the local route.
 USAGE
     exit 0 ;;
   "") ;;
@@ -52,6 +58,32 @@ if [ -n "${GLM52_CONTEXT_SNAPSHOT_CONFIG:-}${GLM52_PROPOSAL_SNAPSHOT_CONFIG:-}" 
   printf 'Active snapshot environment found. Use a clean terminal without snapshot config/PYTHONPATH before benchmarking.\n' >&2; exit 2
 fi
 
+case "$NODE_RANK" in
+  0) MS1_HOST=$NODE0_HOST; PEER_HOST=$NODE1_HOST ;;
+  1) MS1_HOST=$NODE1_HOST; PEER_HOST=$NODE0_HOST ;;
+  *) printf 'NODE_RANK must be 0 or 1.\n' >&2; exit 2 ;;
+esac
+if [ "$NODE0_HOST" = "$NODE1_HOST" ]; then
+  printf 'NODE0_HOST and NODE1_HOST must be different machines.\n' >&2; exit 2
+fi
+if [ -z "$HCCL_SOCKET_IFNAME" ] || [ -z "$GLOO_SOCKET_IFNAME" ]; then
+  if ! ROUTE=$(ip -o route get "$PEER_HOST" 2>/dev/null); then
+    printf 'Cannot find route to %s. Set HCCL_SOCKET_IFNAME and GLOO_SOCKET_IFNAME to actual NIC names at the top.\n' "$PEER_HOST" >&2; exit 2
+  fi
+  ROUTE_NIC=$(printf '%s\n' "$ROUTE" | awk '{for (i=1;i<NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+  HCCL_SOCKET_IFNAME=${HCCL_SOCKET_IFNAME:-$ROUTE_NIC}
+  GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-$ROUTE_NIC}
+fi
+for nic in "$HCCL_SOCKET_IFNAME" "$GLOO_SOCKET_IFNAME"; do
+  if [[ ! "$nic" =~ ^[[:alnum:]_.:-]+$ ]] || [ "$nic" = lo ]; then
+    printf 'Invalid two-node NIC "%s". Inspect ip -o route get %s and edit the NIC settings; lo cannot connect two nodes.\n' "$nic" "$PEER_HOST" >&2; exit 2
+  fi
+  if [ "$PRINT_COMMAND" -eq 0 ] && ! ip link show dev "$nic" >/dev/null 2>&1; then
+    printf 'Configured NIC %s does not exist in this container.\n' "$nic" >&2; exit 2
+  fi
+done
+printf 'Node %s: host=%s peer=%s HCCL=%s GLOO=%s\n' "$NODE_RANK" "$MS1_HOST" "$PEER_HOST" "$HCCL_SOCKET_IFNAME" "$GLOO_SOCKET_IFNAME" >&2
+
 if [ "$PRINT_COMMAND" -eq 0 ]; then
   # 只检查vendor脚本最终状态，允许其内部处理可恢复的失败。
   for setup in /usr/local/Ascend/ascend-toolkit/set_env.sh /usr/local/Ascend/nnal/atb/set_env.sh; do
@@ -66,7 +98,8 @@ RUNTIME_ENV=(
   SGLANG_SET_CPU_AFFINITY=1 STREAMS_PER_DEVICE=32
   SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=600 SGLANG_ENABLE_SPEC_V2=1
   SGLANG_ENABLE_OVERLAP_PLAN_STREAM=1 HCCL_BUFFSIZE=1000 HCCL_OP_EXPANSION_MODE=AIV
-  HCCL_SOCKET_IFNAME=lo GLOO_SOCKET_IFNAME=lo TRANSFORMERS_VERBOSITY=error
+  "HCCL_SOCKET_IFNAME=$HCCL_SOCKET_IFNAME" "GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME"
+  TRANSFORMERS_VERBOSITY=error
   SGLANG_NPU_PROFILING=0 SGLANG_NPU_PROFILING_BS=16
   "PYTHONPATH=$SGLANG_REPO/python${PYTHONPATH:+:$PYTHONPATH}"
   DEEPEP_NORMAL_LONG_SEQ_ROUND=72 DEEPEP_NORMAL_LONG_SEQ_PER_ROUND_TOKENS=1024
@@ -77,7 +110,8 @@ RUNTIME_ENV=(
 )
 SERVER_ARGS=(
   --model-path "$TARGET_MODEL" --attention-backend ascend --device npu
-  --tp-size 16 --nnodes 1 --dp-size 1 --enable-dp-attention
+  --tp-size 32 --nnodes 2 --node-rank "$NODE_RANK" --dp-size 8
+  --dist-init-addr "$NODE0_HOST:$DIST_PORT" --enable-dp-attention --enable-dp-lm-head
   --context-length "$CONTEXT_LENGTH" --chunked-prefill-size -1 --max-prefill-tokens 69632
   --trust-remote-code --mem-fraction-static 0.85 --max-running-requests 8
   --served-model-name "$SERVED_MODEL_NAME" --quantization modelslim

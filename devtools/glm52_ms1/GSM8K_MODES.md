@@ -1,4 +1,6 @@
-# GSM8K：五模式各10题快速比较
+# 历史协议附录：GSM8K五模式（1024预算）
+
+**新机器准备和两个服务启动脚本统一见[启动手册](README.md)。本文件只保留旧工具协议，复现历史成绩时参考；不再维护独立操作步骤。**
 
 ## 本轮做什么，以及结果决定什么
 
@@ -16,77 +18,6 @@ target-only eager/graph和已有NEXTN graph，观察问题是否随题目/算法
 - 当前graph指decode/verify图配置；prefill是否图化以解析配置为准。不能称“全部计算上图”。
 - NEXTN沿用同事配置：steps=4、topk=1、draft_tokens=5；服务解析后algorithm可能显示EAGLE。
 - DSpark使用QuaRot original候选、自有embedding/head和加载时Q-fold。
-
-## 本地配置与执行
-
-仓库不保存机器IP、个人目录、镜像地址和权重路径。先在仓库外准备自己的
-`single.local.sh`，以下值均为占位符，替换为当前容器内可见的真实信息：
-
-```bash
-export SGLANG_REPO=/SET_ABSOLUTE_SGLANG_CHECKOUT
-export MS1_STATE=/SET_ABSOLUTE_RUN_STATE
-export MS1_HOST=SET_SERVER_ADDRESS
-export MS1_PORT=8810
-export TARGET_MODEL=/SET_ABSOLUTE_TARGET_CHECKPOINT
-export DRAFT_MODEL=/SET_ABSOLUTE_DSPARK_CHECKPOINT
-export SERVED_MODEL_NAME=model
-```
-
-两个终端都进入同一已有测试容器，并加载同一份本地配置：
-
-```bash
-source /SET_LOCAL_SETTINGS_FILE
-cd "$SGLANG_REPO"
-GSM_ARGS=(--host "$MS1_HOST" --port "$MS1_PORT" --state "$MS1_STATE"
-  --target "$TARGET_MODEL" --draft "$DRAFT_MODEL" --served-model-name "$SERVED_MODEL_NAME")
-```
-
-使用原服务Python；若在EvalScope虚拟环境中，先执行`deactivate`。同步源码时应先
-停止旧服务，再执行`git pull`，不要在运行过程中更换源码。
-
-终端A启动服务：
-
-```bash
-python3 devtools/glm52_ms1/bench_gsm8k_modes.py launch dspark-eager "${GSM_ARGS[@]}"
-```
-
-等服务就绪，终端B运行同一组10题：
-
-```bash
-python3 devtools/glm52_ms1/bench_gsm8k_modes.py run dspark-eager "${GSM_ARGS[@]}"
-```
-
-本地模型路径同时传给社区benchmark的`--model`与`--tokenizer`，
-`--served-model-name`单独决定HTTP模型名，避免把服务别名当成在线模型仓库查找。
-固定GSM8K十题已随工具提供，无需在内网下载数据集或安装EvalScope。
-
-`launch`只是选择已有 `single_dspark_static.sh` 的MODE/GRAPH，显式开启metrics；
-无snapshot hook，不更改SGLang或kernel源码。`run`才是客户端，调用当前checkout的
-`sglang.benchmark.serving`；只在这个客户端进程里捕获同次HTTP响应，不重发题目。
-
-按顺序把上述两条命令中的模式替换为下表值：
-
-| 顺序 | 模式值 | 服务算法 | 目标图配置 |
-|---|---|---|---|
-| 1 | `dspark-eager` | DSpark static，block8/verify9 | 禁用 |
-| 2 | `dspark-graph` | DSpark static，block8/verify9 | 启用 |
-| 3 | `target-eager` | target-only | 禁用 |
-| 4 | `target-graph` | target-only | 启用 |
-| 5 | `nextn-graph` | NEXTN，4/1/5 | 启用 |
-
-每组客户端完成后，回终端A按Ctrl+C停止服务，再启动下一组。
-不能只改客户端mode而不重启服务；工具会拒绝与 `/server_info` 不符的配置。
-不使用旧 `with_proposal_snapshot.py` / `with_context_snapshot.py` 启动方式。
-若graph组启动/请求失败，保留首个异常及前后日志；该组记录为未完成，不自动降级eager。
-
-`--host`、`--target`、`--state`、`--served-model-name`必填；DSpark模式还必须提供`--draft`。
-两端配置必须一致，尤其权重路径应使用当前容器实际可见的路径。
-可加`--print-command`查看命令，不启动服务或发请求；输出含本地配置，留在内网。
-
-直接调用`single_dspark_static.sh`时，同样要求`MS1_HOST`、`TARGET_MODEL`、`MS1_STATE`；
-仅DSpark要求`DRAFT_MODEL`，`SERVED_MODEL_NAME`默认使用通用别名`model`。
-如需创建容器，`start_container.sh`另要求在仓库外配置`IMAGE`与`CONTAINER_NAME`；
-cache目录由`MS1_STATE`派生，保留逐个设备和宿主机核心目录挂载。
 
 ## 看哪些结果
 
