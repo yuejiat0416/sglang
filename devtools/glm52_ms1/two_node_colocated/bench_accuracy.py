@@ -162,8 +162,8 @@ def score_collected(summary, mapping, dataset):
     }
 
 
-def run(args):
-    cfg = load_config(args.config)
+def run(args, cfg=None):
+    cfg = load_config(args.config) if cfg is None else cfg
     fixture = read_fixture(args.fixture)
     cases = fixture["cases"][: args.limit] if args.limit else fixture["cases"]
     dataset = fixture["dataset"]

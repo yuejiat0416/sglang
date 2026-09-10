@@ -684,7 +684,7 @@ def parser_args(argv=None):
     return args
 
 
-def main(argv=None):
+def run(args, config=None):
     from config import load_config
     from client_common import (
         benchmark_context,
@@ -696,8 +696,7 @@ def main(argv=None):
         write_json,
     )
 
-    args = parser_args(argv)
-    config = load_config(args.config)
+    config = load_config(args.config) if config is None else config
     run = prepare_run(config, "gsp-prefix", args.mode)
     percentages = [0, 50, 90] if args.cache_hit == "all" else [int(args.cache_hit)]
     summary = {
@@ -711,6 +710,7 @@ def main(argv=None):
         info = json.loads(fetch_text(config["base_url"] + "/server_info"))
         write_json(run / "server_info.before.json", info)
         selected = validate_server(info, config, args.mode)
+        summary["server_configuration"] = selected
         preflight = prefix_preflight(info, config, args.concurrency, percentages)
         write_json(run / "preflight.json", preflight)
         summary["preflight"] = preflight
@@ -793,6 +793,10 @@ def main(argv=None):
         write_json(run / "summary.json", summary)
         print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
         print(f"Evidence: {run}", flush=True)
+
+
+def main(argv=None):
+    return run(parser_args(argv))
 
 
 if __name__ == "__main__":
