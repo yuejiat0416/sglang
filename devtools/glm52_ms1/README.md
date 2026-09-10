@@ -298,6 +298,20 @@ NODE_RANK=1
 
 脚本已填两台IP、HTTP端口8810和分布式初始化端口50000。网卡默认按本机通往对端的路由自动读取，并打印实际选择；如果部门要求HCCL专用网卡，在开头`HCCL_SOCKET_IFNAME=''`的单引号内填真实名字，Gloo同理。不要填lo。
 
+如果旧脚本报`Configured NIC ... does not exist`，但`ls /sys/class/net`能看到该网卡，这是旧检查可能将`ip`命令失败误报为网卡不存在。已填写两个网卡名时，新检查直接读取`/sys/class/net/网卡名`，不依赖`ip`命令。保留现场配置，在原文件找到下面这一行：
+
+~~~bash
+  if [ "$PRINT_COMMAND" -eq 0 ] && ! ip link show dev "$nic" >/dev/null 2>&1; then
+~~~
+
+只将这一行改为：
+
+~~~bash
+  if [ "$PRINT_COMMAND" -eq 0 ] && [ ! -d "/sys/class/net/$nic" ]; then
+~~~
+
+随后重新执行同一个启动脚本，保留现场填写的IP、网卡名和NODE_RANK。此修复只处理启动前检查，仍由`with_kernel_checkout.py`组合分支192算子与镜像依赖，不需要手改安装包。网卡目录存在不等于双机通信已通；如果继续报不存在，先核对是否在此前列出网卡的同一个容器。若进入kernel加载或SGLang初始化，按下一条实际异常定位。
+
 在61.47.19.71的容器运行：
 
 ~~~bash

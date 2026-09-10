@@ -146,7 +146,16 @@ def test_literal_switches_can_be_edited_without_mode_environment(tmp_path):
     assert option(argv, "--cuda-graph-bs") == "16"
 
 
-def test_normal_launch_only_sources_vendor_and_executes_existing_overlay(tmp_path):
+@pytest.mark.parametrize("ip_status,nic_present", ((0, True), (127, True), (127, False)))
+def test_explicit_nic_checks_sysfs_before_existing_overlay(
+    tmp_path, ip_status, nic_present
+):
+    # Substitute only the host filesystem root; never access real NICs/CANN/NPUs.
+    net = tmp_path / "sys/class/net"
+    if nic_present:
+        (net / "eth-explicit").mkdir(parents=True)
+    script = tmp_path / "launch.sh"
+    script.write_text(SCRIPT.read_text().replace("/sys/class/net", str(net)))
     hooks = tmp_path / "hooks.sh"
     hooks.write_text('source() { false; export PYTHONPATH="vendor"; }\n')
     python = tmp_path / "python3"
@@ -157,8 +166,11 @@ def test_normal_launch_only_sources_vendor_and_executes_existing_overlay(tmp_pat
     )
     python.chmod(0o755)
     result = run_script(
+        script=script,
         overrides={
-            "PATH": fake_ip(tmp_path),
+            "PATH": fake_ip(tmp_path, status=ip_status),
+            "HCCL_SOCKET_IFNAME": "eth-explicit",
+            "GLOO_SOCKET_IFNAME": "eth-explicit",
             "BASH_ENV": str(hooks),
             "LAUNCH_TEST_LOG": str(log),
             "SGLANG_REPO": "/test/sglang",
@@ -166,6 +178,11 @@ def test_normal_launch_only_sources_vendor_and_executes_existing_overlay(tmp_pat
             "MS1_STATE": str(tmp_path / "state"),
         }
     )
+    if not nic_present:
+        assert result.returncode == 2
+        assert "Configured NIC eth-explicit does not exist" in result.stderr
+        assert not log.exists()
+        return
     assert result.returncode == 0, result.stderr
     argv = json.loads(log.read_text())
     assert argv[0] == "/test/sglang/devtools/glm52_ms1/with_kernel_checkout.py"

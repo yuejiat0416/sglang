@@ -78,7 +78,7 @@ for nic in "$HCCL_SOCKET_IFNAME" "$GLOO_SOCKET_IFNAME"; do
   if [[ ! "$nic" =~ ^[[:alnum:]_.:-]+$ ]] || [ "$nic" = lo ]; then
     printf 'Invalid two-node NIC "%s". Inspect ip -o route get %s and edit the NIC settings; lo cannot connect two nodes.\n' "$nic" "$PEER_HOST" >&2; exit 2
   fi
-  if [ "$PRINT_COMMAND" -eq 0 ] && ! ip link show dev "$nic" >/dev/null 2>&1; then
+  if [ "$PRINT_COMMAND" -eq 0 ] && [ ! -d "/sys/class/net/$nic" ]; then
     printf 'Configured NIC %s does not exist in this container.\n' "$nic" >&2; exit 2
   fi
 done
