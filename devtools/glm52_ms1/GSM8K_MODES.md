@@ -2,9 +2,8 @@
 
 ## 本轮做什么，以及结果决定什么
 
-当前处于低接受率定位期间的**横向基线比较**。已有固定小用例在 QuaRot
-候选后约27.7%接受率；首proposal/layer0的局部检查尚未给出可以修改FIA的依据。
-本轮暂不增加模型内部取样，换同一批GSM8K题目比较DSpark eager/graph、
+当前处于接受率定位期间的**横向基线比较**。
+用同一批GSM8K题目比较DSpark eager/graph、
 target-only eager/graph和已有NEXTN graph，观察问题是否随题目/算法/执行模式变化。
 这不替代下一轮Draft最终hidden→head/Markov→Verify对齐诊断。
 
@@ -16,60 +15,56 @@ target-only eager/graph和已有NEXTN graph，观察问题是否随题目/算法
 - 五组共50条正式请求；启动器自己的服务warmup不属于benchmark10题，指标取运行前后差。
 - 当前graph指decode/verify图配置；prefill是否图化以解析配置为准。不能称“全部计算上图”。
 - NEXTN沿用同事配置：steps=4、topk=1、draft_tokens=5；服务解析后algorithm可能显示EAGLE。
-- DSpark沿用已测QuaRot original候选、自有embedding/head和加载时Q-fold，不退回最初2%配方。
+- DSpark使用QuaRot original候选、自有embedding/head和加载时Q-fold。
 
-## 客户端模型名修正：2026-09-09
+## 本地配置与执行
 
-若日志在 `Server ready` 后访问 `huggingface.co/GLM-5.2-w8a8/.../config.json`，
-这是旧工具把服务名交给模板检查导致的，与GSM8K数据下载无关。
-当前修正使用 `--model 本地target路径`、`--tokenizer 本地target路径`，
-另用 `--served-model-name GLM-5.2-w8a8` 保持HTTP请求模型名。
-代码中的 `gsm8k10.json` 已包含固定10题；本轮无需再下载或传送数据集。
-
-该错误发生在客户端发题之前。在**客户端终端**按Ctrl+C，然后：
+仓库不保存机器IP、个人目录、镜像地址和权重路径。先在仓库外准备自己的
+`single.local.sh`，以下值均为占位符，替换为当前容器内可见的真实信息：
 
 ```bash
-cd /home/tyj/glm52/sglang
-git pull
-python3 devtools/glm52_ms1/bench_gsm8k_modes.py run dspark-eager
+export SGLANG_REPO=/SET_ABSOLUTE_SGLANG_CHECKOUT
+export MS1_STATE=/SET_ABSOLUTE_RUN_STATE
+export MS1_HOST=SET_SERVER_ADDRESS
+export MS1_PORT=8810
+export TARGET_MODEL=/SET_ABSOLUTE_TARGET_CHECKPOINT
+export DRAFT_MODEL=/SET_ABSOLUTE_DSPARK_CHECKPOINT
+export SERVED_MODEL_NAME=model
 ```
 
-这次同步只有临时客户端/测试/指南变动，当前服务保持运行，不需重启。
-恢复后应看到 `Loaded 10 OpenAI-format requests` 并开始测试。
-若仍失败，保留首个新错误与新Evidence；不要把网络失败算成接受率失败。
-其他模式也自动使用同一修正，固定10题、统计口径、采样和输出预算保持。
-
-## 内网怎么跑
-
-两终端必须进入**同一个已有测试容器**。使用原镜像的服务Python；若当前在
-`(evalscope-venv)`里先执行 `deactivate`。不重建容器、不更换安装包。
-
-先在仓库同步；切换前确认当前服务已用Ctrl+C停止，避免运行期间更换源码：
+两个终端都进入同一已有测试容器，并加载同一份本地配置：
 
 ```bash
-cd /home/tyj/glm52/sglang
-git switch sync/glm52-dspark-ms1
-git pull
+source /SET_LOCAL_SETTINGS_FILE
+cd "$SGLANG_REPO"
+GSM_ARGS=(--host "$MS1_HOST" --port "$MS1_PORT" --state "$MS1_STATE"
+  --target "$TARGET_MODEL" --draft "$DRAFT_MODEL" --served-model-name "$SERVED_MODEL_NAME")
 ```
 
-以下每组都只需要两步。以第一组为例，在**终端A**启动服务：
+使用原服务Python；若在EvalScope虚拟环境中，先执行`deactivate`。同步源码时应先
+停止旧服务，再执行`git pull`，不要在运行过程中更换源码。
+
+终端A启动服务：
 
 ```bash
-python3 devtools/glm52_ms1/bench_gsm8k_modes.py launch dspark-eager
+python3 devtools/glm52_ms1/bench_gsm8k_modes.py launch dspark-eager "${GSM_ARGS[@]}"
 ```
 
-等 `server is fired up`，在**终端B**发出这10题：
+等服务就绪，终端B运行同一组10题：
 
 ```bash
-cd /home/tyj/glm52/sglang
-python3 devtools/glm52_ms1/bench_gsm8k_modes.py run dspark-eager
+python3 devtools/glm52_ms1/bench_gsm8k_modes.py run dspark-eager "${GSM_ARGS[@]}"
 ```
+
+本地模型路径同时传给社区benchmark的`--model`与`--tokenizer`，
+`--served-model-name`单独决定HTTP模型名，避免把服务别名当成在线模型仓库查找。
+固定GSM8K十题已随工具提供，无需在内网下载数据集或安装EvalScope。
 
 `launch`只是选择已有 `single_dspark_static.sh` 的MODE/GRAPH，显式开启metrics；
 无snapshot hook，不更改SGLang或kernel源码。`run`才是客户端，调用当前checkout的
 `sglang.benchmark.serving`；只在这个客户端进程里捕获同次HTTP响应，不重发题目。
 
-按顺序把上述**两条命令末尾**的模式替换为下表值：
+按顺序把上述两条命令中的模式替换为下表值：
 
 | 顺序 | 模式值 | 服务算法 | 目标图配置 |
 |---|---|---|---|
@@ -84,14 +79,18 @@ python3 devtools/glm52_ms1/bench_gsm8k_modes.py run dspark-eager
 不使用旧 `with_proposal_snapshot.py` / `with_context_snapshot.py` 启动方式。
 若graph组启动/请求失败，保留首个异常及前后日志；该组记录为未完成，不自动降级eager。
 
-默认是旧容器的 `/workspace/weight/GLM-5.2-w8a8`、
-`/workspace/weight/GLM-5.2-DSpark-NPU-0805`，host `61.47.19.71:8810`。
-路径不同时给 `launch` 和 `run` 两条命令同时加 `--target` / `--draft`；
-不要把tokenizer指向另一制品。可用 `--print-command` 看实际命令而不启动任何东西。
+`--host`、`--target`、`--state`、`--served-model-name`必填；DSpark模式还必须提供`--draft`。
+两端配置必须一致，尤其权重路径应使用当前容器实际可见的路径。
+可加`--print-command`查看命令，不启动服务或发请求；输出含本地配置，留在内网。
+
+直接调用`single_dspark_static.sh`时，同样要求`MS1_HOST`、`TARGET_MODEL`、`MS1_STATE`；
+仅DSpark要求`DRAFT_MODEL`，`SERVED_MODEL_NAME`默认使用通用别名`model`。
+如需创建容器，`start_container.sh`另要求在仓库外配置`IMAGE`与`CONTAINER_NAME`；
+cache目录由`MS1_STATE`派生，保留逐个设备和宿主机核心目录挂载。
 
 ## 看哪些结果
 
-每次客户端创建独立 `/home/tyj/glm52-ms1/evidence/gsm8k-时间-标识-模式/`：
+每次客户端创建独立 `$MS1_STATE/evidence/gsm8k-时间-标识-模式/`：
 
 - `summary.json`：每题和汇总A/P/N、接受率、结束原因、实际图计数及证据边界。
 - `responses.jsonl`：同次原始响应；`responses.md`：问题、参考答案与模型输出，待人工审视。

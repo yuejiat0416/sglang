@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "profile_status": "CANDIDATE_NOT_NPU_VALIDATED",
+  "notes": [
+    "Two A3 nodes, 16 logical NPUs each. TP32/DP8 is a historical candidate, not a validated or frozen release recipe.",
+    "Replace every __FILL_*__ placeholder in a private local copy. Paths must be the actual absolute paths inside both containers.",
+    "Keep the filled configuration and runtime evidence on the test machines; they contain local paths, network addresses and model details.",
+    "context_length does not allocate KV capacity. Client preflight must check the running service before any 128k request.",
+    "max_running_requests=8 is divided by attention DP8, requesting one running request per DP worker; read effective_max_running_requests_per_dp after startup."
+  ],
+  "repo": "__FILL_SGLANG_REPO_ABSOLUTE_PATH__",
+  "kernel_repo": "__FILL_KERNEL_REPO_ABSOLUTE_PATH__",
+  "state": "__FILL_PRIVATE_STATE_ABSOLUTE_PATH__",
+  "python": "python3",
+  "target_model": "__FILL_TARGET_MODEL_ABSOLUTE_PATH__",
+  "draft_model": "__FILL_DRAFT_MODEL_ABSOLUTE_PATH__",
+  "tokenizer": "__FILL_TOKENIZER_ABSOLUTE_PATH__",
+  "served_model_name": "__FILL_MODEL_SERVICE_NAME__",
+  "port": 8810,
+  "dist_port": 50000,
+  "nnodes": 2,
+  "npus_per_node": 16,
+  "tp_size": 32,
+  "dp_size": 8,
+  "context_length": 133120,
+  "max_total_tokens": null,
+  "max_prefill_tokens": 69632,
+  "chunked_prefill_size": -1,
+  "max_running_requests": 8,
+  "mem_fraction_static": 0.85,
+  "graph_batch_sizes": [16],
+  "nodes": [
+    {"rank": 0, "host": "__FILL_NODE0_IPV4__", "hccl_socket_ifname": "__FILL_NODE0_HCCL_NIC__", "gloo_socket_ifname": "__FILL_NODE0_GLOO_NIC__"},
+    {"rank": 1, "host": "__FILL_NODE1_IPV4__", "hccl_socket_ifname": "__FILL_NODE1_HCCL_NIC__", "gloo_socket_ifname": "__FILL_NODE1_GLOO_NIC__"}
+  ]
+}

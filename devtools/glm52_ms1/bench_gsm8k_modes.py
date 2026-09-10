@@ -25,9 +25,6 @@ from gsm8k_mode_stats import graph_count_delta, summarize_responses
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 MODES = ("dspark-eager", "dspark-graph", "target-eager", "target-graph", "nextn-graph")
-DEFAULT_STATE = Path("/home/tyj/glm52-ms1")
-DEFAULT_TARGET = "/workspace/weight/GLM-5.2-w8a8"
-DEFAULT_DRAFT = "/workspace/weight/GLM-5.2-DSpark-NPU-0805"
 SOURCE_SHA = "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14"
 
 
@@ -76,7 +73,9 @@ def request_rows(items, run_id, max_tokens):
     ]
 
 
-def launch_environment(mode, state, host, port, target, draft):
+def launch_environment(
+    mode, state, host, port, target, draft, served_model_name="model"
+):
     env = os.environ.copy()
     # A previous observer must not silently turn this into an instrumented run.
     if any(
@@ -96,8 +95,11 @@ def launch_environment(mode, state, host, port, target, draft):
         MS1_HOST=host,
         MS1_PORT=str(port),
         TARGET_MODEL=target,
-        DRAFT_MODEL=draft,
+        SERVED_MODEL_NAME=served_model_name,
     )
+    env.pop("DRAFT_MODEL", None)
+    if draft is not None:
+        env["DRAFT_MODEL"] = draft
     if mode.startswith("dspark"):
         env["SGLANG_NPU_GLM_DSPARK_QUAROT"] = "original"
     return env
@@ -188,7 +190,7 @@ def bench_arguments(args, run):
         "--model",
         args.target,
         "--served-model-name",
-        "GLM-5.2-w8a8",
+        args.served_model_name,
         "--tokenizer",
         args.target,
         "--dataset-name",
@@ -328,6 +330,10 @@ def run_client(args):
             raise ValueError(
                 "Server target path differs from the tokenizer/target path"
             )
+        if before.get("served_model_name") != args.served_model_name:
+            raise ValueError(
+                "Server served_model_name differs from --served-model-name"
+            )
         if (
             args.mode.startswith("dspark")
             and before.get("speculative_draft_model_path") != args.draft
@@ -429,22 +435,27 @@ def run_client(args):
     return 0 if summary["complete"] else 1
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("launch", "run"))
     parser.add_argument("mode", choices=MODES)
-    parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
-    parser.add_argument("--host", default="61.47.19.71")
+    parser.add_argument("--state", type=Path, required=True)
+    parser.add_argument("--host", required=True)
     parser.add_argument("--port", type=int, default=8810)
-    parser.add_argument("--target", default=DEFAULT_TARGET)
-    parser.add_argument("--draft", default=DEFAULT_DRAFT)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--served-model-name", required=True)
+    parser.add_argument(
+        "--draft", help="Required for DSpark modes; local draft checkpoint path"
+    )
     parser.add_argument("--max-tokens", type=int, default=1024)
     parser.add_argument(
         "--print-command",
         action="store_true",
         help="Print without starting the server/benchmark",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.mode.startswith("dspark") and not args.draft:
+        parser.error("--draft is required for DSpark modes")
     if args.max_tokens < 1 or not 1 <= args.port <= 65535:
         parser.error("max-tokens must be positive and port must be 1..65535")
     if args.action == "run":
@@ -462,7 +473,13 @@ def main():
             return 0
         return run_client(args)
     env = launch_environment(
-        args.mode, args.state, args.host, args.port, args.target, args.draft
+        args.mode,
+        args.state,
+        args.host,
+        args.port,
+        args.target,
+        args.draft,
+        args.served_model_name,
     )
     script = HERE / "single_dspark_static.sh"
     if args.print_command:

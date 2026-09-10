@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # A3 container options follow the SGLang quickstart and the team's example.
-# Set CONTAINER_NAME before running this file to select the second node name.
+# Set IMAGE, CONTAINER_NAME and MS1_STATE in a local file outside the checkout.
 
-IMAGE=swr.cn-southwest-2.myhuaweicloud.com/base_image/dockerhub/lmsysorg/sglang:cann9.1.0-a3-20260904
-CONTAINER_NAME=${CONTAINER_NAME:-tyj-glm52-ms1-target-node0}
+: "${IMAGE:?Set IMAGE to the available A3/CANN 9.1 image reference}"
+: "${CONTAINER_NAME:?Set CONTAINER_NAME to your test container name}"
+: "${MS1_STATE:?Set MS1_STATE to an absolute directory available through the /home mount}"
 
 docker run -it \
   --name "${CONTAINER_NAME}" \
@@ -36,11 +37,11 @@ docker run -it \
   -v /var/queue_schedule:/var/queue_schedule \
   -v /home:/home \
   -e CONTAINER_NAME="${CONTAINER_NAME}" \
-  -e HF_HOME=/home/tyj/glm52-ms1/cache/huggingface \
-  -e TRANSFORMERS_CACHE=/home/tyj/glm52-ms1/cache/huggingface \
-  -e HUGGINGFACE_HUB_CACHE=/home/tyj/glm52-ms1/cache/huggingface/hub \
-  -e TORCH_HOME=/home/tyj/glm52-ms1/cache/torch \
-  -e XDG_CACHE_HOME=/home/tyj/glm52-ms1/cache/xdg \
-  -e PIP_CACHE_DIR=/home/tyj/glm52-ms1/cache/pip \
+  -e HF_HOME="${MS1_STATE}/cache/huggingface" \
+  -e TRANSFORMERS_CACHE="${MS1_STATE}/cache/huggingface" \
+  -e HUGGINGFACE_HUB_CACHE="${MS1_STATE}/cache/huggingface/hub" \
+  -e TORCH_HOME="${MS1_STATE}/cache/torch" \
+  -e XDG_CACHE_HOME="${MS1_STATE}/cache/xdg" \
+  -e PIP_CACHE_DIR="${MS1_STATE}/cache/pip" \
   --entrypoint=bash \
   "${IMAGE}"

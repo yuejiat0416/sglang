@@ -29,9 +29,16 @@ class SingleDSparkStaticTests(unittest.TestCase):
             "KERNEL_REPO",
             "MS1_STATE",
             "BASH_ENV",
+            "SERVED_MODEL_NAME",
         ):
             environment.pop(key, None)
         environment["PYTHONPATH"] = "/existing/python/path"
+        environment.update(
+            MS1_HOST="192.0.2.10",
+            MS1_STATE="/test/run-state",
+            TARGET_MODEL="/test/checkpoints/target",
+            DRAFT_MODEL="/test/checkpoints/draft",
+        )
         environment.update(overrides or {})
         return subprocess.run(
             ["bash", str(SCRIPT), *args],
@@ -77,10 +84,10 @@ class SingleDSparkStaticTests(unittest.TestCase):
             command[:2], ["python3", str(SCRIPT.with_name("with_kernel_checkout.py"))]
         )
         self.assert_option(command, "--kernel-repo", f"{REPO}/../sgl-kernel-npu")
-        self.assert_option(command, "--state-dir", "/home/tyj/glm52-ms1")
+        self.assert_option(command, "--state-dir", "/test/run-state")
         args = self.server_args(command)
         expected = {
-            "--model-path": "/workspace/weight/GLM-5.2-w8a8",
+            "--model-path": "/test/checkpoints/target",
             "--attention-backend": "ascend",
             "--device": "npu",
             "--tp-size": 16,
@@ -90,15 +97,15 @@ class SingleDSparkStaticTests(unittest.TestCase):
             "--max-prefill-tokens": 69632,
             "--mem-fraction-static": 0.85,
             "--max-running-requests": 8,
-            "--served-model-name": "GLM-5.2-w8a8",
+            "--served-model-name": "model",
             "--quantization": "modelslim",
             "--moe-a2a-backend": "deepep",
             "--deepep-mode": "auto",
             "--load-balance-method": "round_robin",
-            "--host": "61.47.19.71",
+            "--host": "192.0.2.10",
             "--port": 8810,
             "--speculative-algorithm": "DSPARK",
-            "--speculative-draft-model-path": "/workspace/weight/GLM-5.2-DSpark-NPU-0805",
+            "--speculative-draft-model-path": "/test/checkpoints/draft",
             "--speculative-draft-model-quantization": "unquant",
             "--speculative-draft-attention-backend": "ascend",
             "--speculative-dspark-block-size": 8,
@@ -245,6 +252,7 @@ class SingleDSparkStaticTests(unittest.TestCase):
                 TARGET_MODEL=f"{root}/target model",
                 MS1_HOST="127.0.0.1",
                 MS1_PORT="18810",
+                SERVED_MODEL_NAME="test served model",
             )
             self.assert_option(command, "--kernel-repo", kernel)
             self.assert_option(command, "--state-dir", state)
@@ -253,6 +261,7 @@ class SingleDSparkStaticTests(unittest.TestCase):
             self.assert_option(args, "--model-path", f"{root}/target model")
             self.assert_option(args, "--host", "127.0.0.1")
             self.assert_option(args, "--port", 18810)
+            self.assert_option(args, "--served-model-name", "test served model")
             self.assertFalse(marker.exists())
             self.assertFalse(state.exists())
 
@@ -365,6 +374,18 @@ class SingleDSparkStaticTests(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
         self.assertEqual(self.run_script("--unknown").returncode, 2)
         self.assertEqual(self.run_script("--print-command", "extra").returncode, 2)
+
+    def test_empty_required_local_settings_stop_before_launch(self):
+        for key in ("MS1_HOST", "MS1_STATE", "TARGET_MODEL", "DRAFT_MODEL"):
+            with self.subTest(key=key):
+                result = self.run_script("--print-command", overrides={key: ""})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(key, result.stderr)
+                self.assertEqual(result.stdout, "")
+        result = self.run_script(
+            "--print-command", overrides={"MODE": "target-only", "DRAFT_MODEL": ""}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_bash_syntax_and_help(self):
         result = subprocess.run(

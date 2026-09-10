@@ -12,11 +12,56 @@ import pytest
 
 import bench_gsm8k_modes as runner
 
+TEST_TARGET = "/test/checkpoints/target"
+TEST_DRAFT = "/test/checkpoints/draft"
+
+
+@pytest.mark.parametrize(
+    "missing", ["--host", "--target", "--state", "--draft", "--served-model-name"]
+)
+def test_cli_requires_local_connection_and_checkpoint_settings(missing):
+    options = {
+        "--host": "192.0.2.10",
+        "--target": TEST_TARGET,
+        "--state": "/test/run-state",
+        "--draft": TEST_DRAFT,
+        "--served-model-name": "test-model",
+    }
+    argv = ["run", "dspark-eager", "--print-command"]
+    for option, value in options.items():
+        if option != missing:
+            argv.extend([option, value])
+    with pytest.raises(SystemExit) as error:
+        runner.main(argv)
+    assert error.value.code == 2
+
+
+def test_target_cli_does_not_require_an_unrelated_draft(capsys):
+    assert (
+        runner.main(
+            [
+                "run",
+                "target-eager",
+                "--print-command",
+                "--host",
+                "192.0.2.10",
+                "--target",
+                TEST_TARGET,
+                "--state",
+                "/test/run-state",
+                "--served-model-name",
+                "test-model",
+            ]
+        )
+        == 0
+    )
+    assert TEST_TARGET in capsys.readouterr().out
+
 
 def server_config(mode):
     dspark, nextn = mode.startswith("dspark"), mode.startswith("nextn")
     return {
-        "speculative_draft_model_path": runner.DEFAULT_DRAFT if dspark else None,
+        "speculative_draft_model_path": TEST_DRAFT if dspark else None,
         "cuda_graph_config": {
             "decode": {"backend": "disabled" if mode.endswith("eager") else "full"}
         },
@@ -24,7 +69,8 @@ def server_config(mode):
         "tp_size": 16,
         "dp_size": 1,
         "nnodes": 1,
-        "model_path": runner.DEFAULT_TARGET,
+        "model_path": TEST_TARGET,
+        "served_model_name": "test-model",
         "speculative_algorithm": "DSPARK" if dspark else ("EAGLE" if nextn else None),
         "disable_cuda_graph": mode.endswith("eager"),
         "disable_decode_cuda_graph": False,
@@ -115,7 +161,13 @@ def test_nested_observer_rejected():
 
 
 def test_bench_args_no_hidden_extra_requests():
-    args = SimpleNamespace(host="host", port=8810, target="tokenizer", max_tokens=1024)
+    args = SimpleNamespace(
+        host="host",
+        port=8810,
+        target="tokenizer",
+        max_tokens=1024,
+        served_model_name="test-model",
+    )
     argv = runner.bench_arguments(args, Path("run"))
     for key, value in (
         ("--num-prompts", "10"),
@@ -250,8 +302,9 @@ def test_client_retains_partial_failure_and_rejects_wrong_server(tmp_path):
         max_tokens=1024,
         host="host",
         port=8810,
-        target=runner.DEFAULT_TARGET,
-        draft=runner.DEFAULT_DRAFT,
+        target=TEST_TARGET,
+        served_model_name="test-model",
+        draft=TEST_DRAFT,
     )
     cfg = server_config("target-eager")
     with mock.patch.object(runner, "fetch_text", return_value=json.dumps(cfg)):
@@ -281,7 +334,13 @@ def test_community_cli_preparation_uses_local_model_and_http_alias(tmp_path, mod
 
     target = tmp_path / "local-target"
     target.mkdir()
-    args = SimpleNamespace(host="host", port=8810, target=str(target), max_tokens=1024)
+    args = SimpleNamespace(
+        host="host",
+        port=8810,
+        target=str(target),
+        max_tokens=1024,
+        served_model_name="test-model",
+    )
     rows = runner.request_rows(runner.cases()["cases"], mode, 1024)
     (tmp_path / "requests.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in rows)
@@ -371,6 +430,6 @@ def test_community_cli_preparation_uses_local_model_and_http_alias(tmp_path, mod
         scope["cli_main"]()
     assert loaded == [str(target), str(target)]
     assert len(submitted) == 1
-    assert submitted[0]["model_id"] == "GLM-5.2-w8a8"
+    assert submitted[0]["model_id"] == "test-model"
     assert submitted[0]["input_requests"] == rows
     assert submitted[0]["warmup_requests"] == 0

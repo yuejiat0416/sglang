@@ -17,8 +17,9 @@ Set MODE=target-only for the same recipe without speculative decoding.
 Set MODE=nextn for the team's existing NEXTN recipe (4 steps, topk 1, 5 tokens).
 GRAPH=0/1 also selects eager/graph for target-only and NEXTN.
 Set ENABLE_METRICS=1 to expose runtime metrics (default: 0).
-Optional overrides: MS1_HOST, MS1_PORT, TARGET_MODEL, DRAFT_MODEL,
-                    KERNEL_REPO, MS1_STATE.
+Required local settings: MS1_HOST, TARGET_MODEL, MS1_STATE.
+DSpark also requires DRAFT_MODEL. Keep these settings outside the checkout.
+Optional overrides: MS1_PORT, KERNEL_REPO, SERVED_MODEL_NAME (default: model).
 --print-command prints the environment/command without sourcing CANN or starting
 the helper/server. Normal execution sources the container's CANN and ATB setup.
 USAGE
@@ -51,12 +52,14 @@ esac
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SGLANG_REPO=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 KERNEL_REPO=${KERNEL_REPO:-"$SGLANG_REPO/../sgl-kernel-npu"}
-MS1_STATE=${MS1_STATE:-/home/tyj/glm52-ms1}
-# The current container maps host /home/weights to /workspace/weight.
-TARGET_MODEL=${TARGET_MODEL:-/workspace/weight/GLM-5.2-w8a8}
-DRAFT_MODEL=${DRAFT_MODEL:-/workspace/weight/GLM-5.2-DSpark-NPU-0805}
-MS1_HOST=${MS1_HOST:-61.47.19.71}
+: "${MS1_STATE:?Set MS1_STATE to a local evidence/cache directory}"
+: "${TARGET_MODEL:?Set TARGET_MODEL to the checkpoint path visible inside this container}"
+: "${MS1_HOST:?Set MS1_HOST to the current serving host address}"
+if [ "$MODE" = dspark ]; then
+  : "${DRAFT_MODEL:?Set DRAFT_MODEL to the separate DSpark checkpoint path}"
+fi
 MS1_PORT=${MS1_PORT:-8810}
+SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-model}
 
 if [ "$PRINT_COMMAND" -eq 0 ]; then
   # Vendor scripts may recover from an internal nonzero command. Check their
@@ -108,7 +111,7 @@ SERVER_ARGS=(
   --max-prefill-tokens 69632
   --trust-remote-code
   --mem-fraction-static 0.85
-  --served-model-name GLM-5.2-w8a8
+  --served-model-name "$SERVED_MODEL_NAME"
   --max-running-requests 8
   --quantization modelslim
   --moe-a2a-backend deepep
