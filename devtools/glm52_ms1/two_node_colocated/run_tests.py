@@ -22,6 +22,9 @@ RESULTS = "/home/tyj/glm52-ms1/dual-node-validation-20260910"  # 同一轮五组
 TP_SIZE = 32
 DP_SIZE = 8
 ACCURACY_MAX_TOKENS = 4096  # 两数据集、所有模式保持一致；截断不记正确
+GSM8K_LIMIT = 10  # 10=当前十题；100=前100题；1319=官方test全量
+# 超过10题时填完整路径，如 /home/tyj/glm52-ms1/datasets/gsm8k-test.jsonl
+GSM8K_SOURCE = ""
 PERFORMANCE_REQUESTS = 64  # 每种命中率64条；不是三档总共64条
 PERFORMANCE_CONCURRENCY = 8  # 同时最多8条，每个DP固定一路
 
@@ -59,6 +62,25 @@ def settings():
     }
 
 
+def dataset_settings(dataset):
+    directory = Path(DATASETS)
+    if dataset == "gsm8k":
+        count = GSM8K_LIMIT
+        if type(count) is not int or count <= 0:
+            raise ValueError("GSM8K_LIMIT 必须是正整数，例如10、100或1319")
+        source = Path(GSM8K_SOURCE) if GSM8K_SOURCE else None
+        if source is None and count > 10:
+            raise ValueError(
+                "仓库只自带10题；请将完整test.jsonl传到节点0，"
+                "并在顶部GSM8K_SOURCE填写本地文件的绝对路径"
+            )
+        if source is not None and not source.is_absolute():
+            raise ValueError("GSM8K_SOURCE 请填写本地文件的绝对路径")
+    else:
+        count, source = 10, directory / "gpqa_diamond.csv"
+    return source, count, directory / f"{dataset}-{count}.json"
+
+
 def prepare(datasets=("gsm8k", "gpqa")):
     from client_common import write_json
     from offline_dataset import prepare_dataset
@@ -67,35 +89,36 @@ def prepare(datasets=("gsm8k", "gpqa")):
     directory.mkdir(parents=True, exist_ok=True)
     failed = False
     for dataset in datasets:
-        source = directory / "gpqa_diamond.csv" if dataset == "gpqa" else None
-        fixture = prepare_dataset(dataset, source, limit=10, seed=42)
+        source, count, destination = dataset_settings(dataset)
+        fixture = prepare_dataset(dataset, source, limit=count, seed=42)
         if fixture["status"] != "DATASET_PREPARED":
             print(dataset, fixture["issues"])
             failed = True
             continue
-        destination = directory / f"{dataset}-10.json"
         if destination.exists() and json.loads(destination.read_text()) != fixture:
             raise ValueError(
                 f"已有样本与本次来源不同：{destination}；先保留旧文件并使用新的测试目录"
             )
         write_json(destination, fixture)
-        print(f"{dataset}: 固定10题 -> {destination}")
+        print(f"{dataset}: 固定{count}题 -> {destination}")
     return int(failed)
 
 
 def accuracy(cfg, datasets=("gsm8k", "gpqa")):
     from bench_accuracy import read_fixture, run
 
-    # 只检查选中的数据；选两份时仍先全部检查，避免半途发现缺文件。
-    fixtures = [Path(DATASETS) / f"{name}-10.json" for name in datasets]
-    for path in fixtures:
-        if len(read_fixture(path)["cases"]) != 10:
-            raise ValueError(f"本轮每个数据集固定10题：{path}")
-    for path in fixtures:
+    # 自动准备所选样本并核对来源；不要求用户手工生成中间文件。
+    if prepare(datasets):
+        return 2
+    fixtures = [dataset_settings(name) for name in datasets]
+    for _, count, path in fixtures:
+        if len(read_fixture(path)["cases"]) != count:
+            raise ValueError(f"样本数量与本轮要求{count}题不符：{path}")
+    for _, count, path in fixtures:
         args = SimpleNamespace(
             mode=MODE,
             fixture=path,
-            limit=10,
+            limit=count,
             max_tokens=ACCURACY_MAX_TOKENS,
             repeats=1,
             concurrency=1,

@@ -66,13 +66,113 @@ def test_gsm8k_only_prepares_and_runs_without_gpqa(tmp_path, monkeypatch, result
     assert seen[0].max_tokens == run_tests.ACCURACY_MAX_TOKENS
 
 
-def test_missing_selected_fixture_does_not_call_model(tmp_path, monkeypatch):
+def test_missing_selected_source_does_not_call_model(tmp_path, monkeypatch):
     monkeypatch.setattr(run_tests, "DATASETS", str(tmp_path))
 
     def unexpected_run(*args, **kwargs):
         raise AssertionError("Missing data must not issue model requests")
 
     monkeypatch.setattr(bench_accuracy, "run", unexpected_run)
+    assert run_tests.main(["accuracy", "--dataset", "gpqa"]) == 2
+
+
+def test_accuracy_prepares_bundled_ten_without_separate_command(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_tests, "DATASETS", str(tmp_path))
+    seen = []
+    monkeypatch.setattr(bench_accuracy, "run", lambda args, cfg: seen.append(args) or 0)
+    assert run_tests.main(["accuracy", "--dataset", "gsm8k"]) == 0
+    assert len(bench_accuracy.read_fixture(seen[0].fixture)["cases"]) == 10
+
+
+def write_gsm_source(path, count):
+    path.write_text(
+        "".join(
+            json.dumps(
+                {"question": f"What is {i} plus 1?", "answer": f"Steps\n#### {i + 1}"}
+            )
+            + "\n"
+            for i in range(count)
+        )
+    )
+
+
+@pytest.mark.parametrize("count", (100, 1319))
+def test_larger_gsm_run_uses_raw_source_once_and_preserves_ten(
+    tmp_path, monkeypatch, count
+):
+    source = tmp_path / "gsm8k-test.jsonl"
+    write_gsm_source(source, 1319)
+    old = tmp_path / "gsm8k-10.json"
+    old.write_text('{"previous_ten_question_fixture": true}')
+    monkeypatch.setattr(run_tests, "DATASETS", str(tmp_path))
+    monkeypatch.setattr(run_tests, "GSM8K_LIMIT", count)
+    monkeypatch.setattr(run_tests, "GSM8K_SOURCE", str(source))
+    seen = []
+
+    def collect(args, cfg):
+        fixture = bench_accuracy.read_fixture(args.fixture)
+        requests, mapping = bench_accuracy.make_requests(
+            fixture["cases"][: args.limit], "test-full", args.max_tokens
+        )
+        assert len(requests) == len(mapping) == count
+        assert fixture["source"]["row_count"] == 1319
+        assert fixture["cases"][-1]["answer"] == str(count)
+        assert all("Steps" not in r["messages"][0]["content"] for r in requests)
+        assert all("answer" not in r for r in requests)
+        assert args.concurrency == 1 and args.max_tokens == 4096
+        seen.append(args)
+        return 0
+
+    monkeypatch.setattr(bench_accuracy, "run", collect)
+    assert run_tests.main(["accuracy", "--dataset", "gsm8k"]) == 0
+    assert len(seen) == 1 and seen[0].fixture.name == f"gsm8k-{count}.json"
+    assert old.read_text() == '{"previous_ten_question_fixture": true}'
+    assert not (tmp_path / "gpqa-10.json").exists()
+
+
+@pytest.mark.parametrize("source_kind", ("unset", "missing", "too_short"))
+def test_full_gsm_never_falls_back_to_ten_or_sends_partial_dataset(
+    tmp_path, monkeypatch, source_kind
+):
+    source = tmp_path / "gsm8k-test.jsonl"
+    if source_kind == "too_short":
+        write_gsm_source(source, 10)
+    monkeypatch.setattr(run_tests, "DATASETS", str(tmp_path))
+    monkeypatch.setattr(run_tests, "GSM8K_LIMIT", 1319)
+    monkeypatch.setattr(
+        run_tests, "GSM8K_SOURCE", "" if source_kind == "unset" else str(source)
+    )
+
+    def unexpected_run(*args, **kwargs):
+        raise AssertionError("Incomplete full dataset must not issue requests")
+
+    monkeypatch.setattr(bench_accuracy, "run", unexpected_run)
+    assert run_tests.main(["accuracy", "--dataset", "gsm8k"]) == 2
+    assert not (tmp_path / "gsm8k-1319.json").exists()
+
+
+def test_larger_gsm_rechecks_source_before_reusing_fixture(tmp_path, monkeypatch):
+    source = tmp_path / "gsm8k-test.jsonl"
+    write_gsm_source(source, 100)
+    monkeypatch.setattr(run_tests, "DATASETS", str(tmp_path))
+    monkeypatch.setattr(run_tests, "GSM8K_LIMIT", 100)
+    monkeypatch.setattr(run_tests, "GSM8K_SOURCE", str(source))
+    assert run_tests.main(["prepare", "--dataset", "gsm8k"]) == 0
+    old = (tmp_path / "gsm8k-100.json").read_bytes()
+    source.write_text(source.read_text().replace("What is 0", "Calculate 0", 1))
+
+    def unexpected_run(*args, **kwargs):
+        raise AssertionError("Changed source must not silently reuse saved questions")
+
+    monkeypatch.setattr(bench_accuracy, "run", unexpected_run)
+    assert run_tests.main(["accuracy", "--dataset", "gsm8k"]) == 2
+    assert (tmp_path / "gsm8k-100.json").read_bytes() == old
+
+
+@pytest.mark.parametrize("count", (0, -1, True, "1319"))
+def test_gsm_count_must_be_explicit_positive_integer(tmp_path, monkeypatch, count):
+    monkeypatch.setattr(run_tests, "DATASETS", str(tmp_path))
+    monkeypatch.setattr(run_tests, "GSM8K_LIMIT", count)
     assert run_tests.main(["accuracy", "--dataset", "gsm8k"]) == 2
 
 
@@ -88,6 +188,7 @@ def test_accuracy_keeps_datasets_separate_and_stops_after_failure(
     monkeypatch, first_result, expected_count
 ):
     seen = []
+    monkeypatch.setattr(run_tests, "prepare", lambda datasets: 0)
     monkeypatch.setattr(
         bench_accuracy, "read_fixture", lambda path: {"cases": [{}] * 10}
     )

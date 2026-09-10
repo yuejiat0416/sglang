@@ -309,7 +309,9 @@ def prepare_dataset(dataset, input_path=None, *, limit=10, seed=42):
         "issues": [],
         "limits": [
             "No downloads. GPQA Diamond provenance/split depends on the supplied local source; SHA records exactly the bytes used.",
-            "Ten questions are a diagnostic sample, not a full benchmark or statistical proof of no accuracy regression.",
+            "Ten questions are a diagnostic sample, not a full benchmark or statistical proof of no accuracy regression."
+            if limit == 10
+            else "Scores describe the selected local data and prompt protocol; paired target-only evaluation is still required.",
             "Send only case.messages. answer and source records are local scoring data.",
         ],
     }

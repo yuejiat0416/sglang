@@ -427,17 +427,16 @@ scp gpqa_diamond.csv root@61.47.19.71:/home/tyj/glm52-ms1/datasets/
 
 如果网络隔离，先转到内网PC，再从内网PC上传同一个文件。**不需要把GPQA传给节点1；数据只由节点0的客户端读取。**题目、答案、生成响应和权重留在内网，Git只同步工具。
 
-### 9.2 一次准备两份固定十题
+### 9.2 默认十题，当前只跑GSM8K
 
 **当前先跑通GSM8K十题，GPQA暂停。** 服务保持当前双机DSpark eager，在节点0同一容器另开客户端终端；先把`two_node_colocated/run_tests.py`顶部的`HOST`改为当前节点0地址，`MODE`设为`"dspark-eager"`，模型目录及TP/DP与运行服务一致。只运行：
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-python3 devtools/glm52_ms1/two_node_colocated/run_tests.py prepare --dataset gsm8k
 python3 devtools/glm52_ms1/two_node_colocated/run_tests.py accuracy --dataset gsm8k
 ~~~
 
-这只准备和读取仓库自带的GSM8K十题，不检查GPQA文件，不需要联网下载或EvalScope。`prepare`完成后再执行`accuracy`；每题串行、temperature=0、最多4096输出token，尊重EOS。客户端继续调用已有bench_serving及A/P/N采集、评分，不改变服务计算。
+这会自动准备和读取仓库自带的GSM8K十题，不检查GPQA文件，不需要联网下载或EvalScope，也不用单独执行`prepare`。每题串行、temperature=0、最多4096输出token，尊重EOS。客户端继续调用已有bench_serving及A/P/N采集、评分，不改变服务计算。十题之外或全量test见9.4。
 
 先看`DATASET_COLLECTED`、十题完成情况、`correct`、截断/未解析数量及`Acceptance`。这是小样本功能/精度与接受率观察，不能作为压力>50%的准出。首组完整后再切target-only eager，以同样十题和预算补对照；再验证graph。任何请求失败先保留对应`summary.json`并定位，不追加GPQA或128k压测。后续恢复GPQA时用`--dataset gpqa`单独准备/运行，或不填该参数按下面的双数据集流程处理。
 
@@ -467,10 +466,65 @@ MODE = "dspark-eager"
 | DATASETS | 两份十题样本与GPQA原CSV所在目录 |
 | RESULTS | 本轮所有模式的结果总目录；五组保持一致，另开一轮比较时换新目录名 |
 | ACCURACY_MAX_TOKENS | 每题最多4096输出token；允许EOS提前结束，所有模式一致 |
+| GSM8K_LIMIT | 默认10；可改100或1319，按源文件顺序选前N题；1319对应官方main/test全量 |
+| GSM8K_SOURCE | 默认空字符串，使用自带十题；超过十题时填已上传的官方test.jsonl绝对路径，不填URL |
 | PERFORMANCE_REQUESTS | 每档缓存64条正式请求，三档共192条；不含预热 |
 | PERFORMANCE_CONCURRENCY | 同时最多8条，固定分到8个DP组；不是每DP再并发8条 |
 
 RESULTS默认/home/tyj/glm52-ms1/dual-node-validation-20260910。日志留在第6节指定的位置；测试数据自动写在RESULTS下，不用你创建更多配置。
+
+### 9.4 跑更多GSM8K或全量test：仍用同一个脚本
+
+**当前节点0为61.47.19.68，节点1为61.47.19.69。** 全量精度通常指GSM8K **main/test的1319题**，不是把7473条训练数据混入测试。[官方test文件](https://github.com/openai/grade-school-math/blob/master/grade_school_math/data/test.jsonl)。当前仓库只自带十题，因此超过十题必须提供完整本地数据。评分、请求内容和接受计数继续复用原工具；只改客户端，不重启服务、不安装EvalScope。
+
+先在**能联网的PC终端**下载（Windows PowerShell将`curl`写成`curl.exe`）：
+
+~~~bash
+curl -fL "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl" -o gsm8k-test.jsonl
+~~~
+
+得到`gsm8k-test.jsonl`。若外网PC不能连接服务器，按现有文件传输方式先送到内网PC；再从**能连接68的PC终端**上传：
+
+~~~bash
+scp gsm8k-test.jsonl root@61.47.19.68:/home/tyj/glm52-ms1/datasets/
+~~~
+
+也可以用SFTP把同一个文件放到该目录。此前十题测试已经使用这个目录；`/home:/home`挂载下容器路径相同。数据只需在68，不需要传给69。
+
+若客户端仍是只有十题设置的旧版本，在**68容器的客户端终端**更新下列文件；这是一次工具更新，不要用整仓恢复覆盖两台启动脚本。先备份当前测试文件：
+
+~~~bash
+cd /home/tyj/glm52/sglang
+cp devtools/glm52_ms1/two_node_colocated/run_tests.py /tmp/glm52-run-tests-before-full.py
+git fetch origin sync/glm52-dspark-ms1
+git restore --source=FETCH_HEAD -- devtools/glm52_ms1/two_node_colocated/run_tests.py devtools/glm52_ms1/two_node_colocated/offline_dataset.py devtools/glm52_ms1/README.md
+~~~
+
+此更新会把`run_tests.py`顶部恢复为仓库默认值，**必须按下面重新填写HOST、MODE及实际服务路径/TP/DP**；原参数可查`/tmp/glm52-run-tests-before-full.py`。已经含`GSM8K_LIMIT`和`GSM8K_SOURCE`的版本跳过上述更新。修改文件：
+
+~~~bash
+vi devtools/glm52_ms1/two_node_colocated/run_tests.py
+~~~
+
+按`i`编辑，设置为：
+
+~~~python
+HOST = "61.47.19.68"
+GSM8K_LIMIT = 1319
+GSM8K_SOURCE = "/home/tyj/glm52-ms1/datasets/gsm8k-test.jsonl"
+~~~
+
+`MODE`仍必须与当前服务一致：target-only eager填`"target-eager"`，DSpark eager填`"dspark-eager"`；graph则对应`"target-graph"`或`"dspark-graph"`。**改客户端MODE不会切换服务器。** 模型路径、TP/DP保持与服务一致。只想先扩大到100题，把`GSM8K_LIMIT`改为100，完整文件路径不变。只替换引号里面的路径/地址，数字1319不加引号；按`Esc`、输入`:wq`、回车保存。
+
+然后仍然只执行：
+
+~~~bash
+python3 devtools/glm52_ms1/two_node_colocated/run_tests.py accuracy --dataset gsm8k
+~~~
+
+脚本自动生成`datasets/gsm8k-1319.json`（100题则`gsm8k-100.json`），保留旧`gsm8k-10.json`；缺文件或题数不足时停止，不会把十题重复发送凑成全量。各模式使用同一文件、同一题数和输出预算；结果在启动时打印的Evidence目录，包含`summary.json`与逐请求`responses.jsonl`。先看完成题数、正确数、未解析/截断及失败项，再比较target-only与DSpark的逐题得分变化和sum(A)/sum(P)。不要把十题target-only与1319题DSpark直接比较。
+
+仍为**并发1、非流式精度采集**，TPOT/TTFT不可用于性能验收；投机模式记录接受率，target-only为不适用。按负责人本轮十题538.78秒粗略外推，全量每模式约19.7小时，实际取决于题目、输出长度及服务状态。此次只扩大题数，不同时改变并发或生成预算；4096 token截断项仍需审视，覆盖完整test不代表与模型卡不同提示/预算下的成绩可直接对比。尚未在NPU实测全量，不自动启动或续跑。
 
 <a id="step10"></a>
 ## 10. 先测精度：四组、每组两套十题
