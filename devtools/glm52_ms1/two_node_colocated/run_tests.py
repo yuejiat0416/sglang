@@ -59,14 +59,14 @@ def settings():
     }
 
 
-def prepare():
+def prepare(datasets=("gsm8k", "gpqa")):
     from client_common import write_json
     from offline_dataset import prepare_dataset
 
     directory = Path(DATASETS)
     directory.mkdir(parents=True, exist_ok=True)
     failed = False
-    for dataset in ("gsm8k", "gpqa"):
+    for dataset in datasets:
         source = directory / "gpqa_diamond.csv" if dataset == "gpqa" else None
         fixture = prepare_dataset(dataset, source, limit=10, seed=42)
         if fixture["status"] != "DATASET_PREPARED":
@@ -83,11 +83,11 @@ def prepare():
     return int(failed)
 
 
-def accuracy(cfg):
+def accuracy(cfg, datasets=("gsm8k", "gpqa")):
     from bench_accuracy import read_fixture, run
 
-    # 两份数据先检查，防止跑完GSM8K才发现GPQA没准备。
-    fixtures = [Path(DATASETS) / f"{name}-10.json" for name in ("gsm8k", "gpqa")]
+    # 只检查选中的数据；选两份时仍先全部检查，避免半途发现缺文件。
+    fixtures = [Path(DATASETS) / f"{name}-10.json" for name in datasets]
     for path in fixtures:
         if len(read_fixture(path)["cases"]) != 10:
             raise ValueError(f"本轮每个数据集固定10题：{path}")
@@ -112,18 +112,26 @@ def main(argv=None):
         "action",
         choices=("prepare", "accuracy", "check", "quick", "performance", "report"),
     )
+    parser.add_argument(
+        "--dataset",
+        choices=("gsm8k", "gpqa"),
+        help="prepare / accuracy只处理指定数据集；不填则分别处理两份",
+    )
     args = parser.parse_args(argv)
+    if args.dataset and args.action not in ("prepare", "accuracy"):
+        parser.error("--dataset 只用于 prepare 或 accuracy")
+    datasets = (args.dataset,) if args.dataset else ("gsm8k", "gpqa")
     try:
         cfg = settings()
         if args.action == "prepare":
-            return prepare()
+            return prepare(datasets)
         if args.action == "report":
             from report import campaign_report
 
             return campaign_report(Path(RESULTS))
         print(f"当前：{MODE}；节点0：{cfg['base_url']}；结果：{RESULTS}", flush=True)
         if args.action == "accuracy":
-            return accuracy(cfg)
+            return accuracy(cfg, datasets)
         from bench_prefix import run
 
         quick = args.action == "quick"

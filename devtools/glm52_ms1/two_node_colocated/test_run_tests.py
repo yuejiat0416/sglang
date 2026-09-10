@@ -46,6 +46,43 @@ def test_prepare_never_replaces_a_different_sample(tmp_path, monkeypatch):
     assert json.loads((tmp_path / "gsm8k-10.json").read_text()) == {"old": True}
 
 
+@pytest.mark.parametrize("result", (0, 1))
+def test_gsm8k_only_prepares_and_runs_without_gpqa(tmp_path, monkeypatch, result):
+    monkeypatch.setattr(run_tests, "DATASETS", str(tmp_path))
+    assert run_tests.main(["prepare", "--dataset", "gsm8k"]) == 0
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["gsm8k-10.json"]
+    fixture = bench_accuracy.read_fixture(tmp_path / "gsm8k-10.json")
+    assert fixture["dataset"] == "gsm8k" and len(fixture["cases"]) == 10
+    seen = []
+
+    def run(args, cfg):
+        seen.append(args)
+        return result
+
+    monkeypatch.setattr(bench_accuracy, "run", run)
+    assert run_tests.main(["accuracy", "--dataset", "gsm8k"]) == result
+    assert len(seen) == 1 and seen[0].fixture.name == "gsm8k-10.json"
+    assert seen[0].limit == 10 and seen[0].concurrency == 1
+    assert seen[0].max_tokens == run_tests.ACCURACY_MAX_TOKENS
+
+
+def test_missing_selected_fixture_does_not_call_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_tests, "DATASETS", str(tmp_path))
+
+    def unexpected_run(*args, **kwargs):
+        raise AssertionError("Missing data must not issue model requests")
+
+    monkeypatch.setattr(bench_accuracy, "run", unexpected_run)
+    assert run_tests.main(["accuracy", "--dataset", "gsm8k"]) == 2
+
+
+@pytest.mark.parametrize("action", ("check", "quick", "performance", "report"))
+def test_dataset_selection_cannot_be_ignored_by_other_actions(action):
+    with pytest.raises(SystemExit) as exc:
+        run_tests.main([action, "--dataset", "gsm8k"])
+    assert exc.value.code == 2
+
+
 @pytest.mark.parametrize("first_result,expected_count", [(0, 2), (1, 1)])
 def test_accuracy_keeps_datasets_separate_and_stops_after_failure(
     monkeypatch, first_result, expected_count

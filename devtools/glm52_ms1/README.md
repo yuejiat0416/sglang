@@ -397,7 +397,7 @@ git pull
 
 先按第7节更新两端代码。模型和镜像按第2至4节准备；源码提交、镜像digest、模型制品须一致。客户端在节点0同一个容器另开终端运行，使用镜像自带Python，不进入evalscope-venv。
 
-### 9.1 GPQA先在能联网的PC下载，再传服务器
+### 9.1 GPQA先在能联网的PC下载，再传服务器（只跑GSM8K时跳过）
 
 GSM8K十题已在仓库gsm8k10.json中，服务器不用访问Hugging Face。GPQA用作者公开的[官方仓库dataset.zip](https://github.com/idavidrein/gpqa)，作者在README公开了解压密码。**在能联网的PC执行**下面整段，只提取Diamond CSV，不下载模型：
 
@@ -428,6 +428,18 @@ scp gpqa_diamond.csv root@61.47.19.71:/home/tyj/glm52-ms1/datasets/
 如果网络隔离，先转到内网PC，再从内网PC上传同一个文件。**不需要把GPQA传给节点1；数据只由节点0的客户端读取。**题目、答案、生成响应和权重留在内网，Git只同步工具。
 
 ### 9.2 一次准备两份固定十题
+
+**当前先跑通GSM8K十题，GPQA暂停。** 服务保持当前双机DSpark eager，在节点0同一容器另开客户端终端；先把`two_node_colocated/run_tests.py`顶部的`HOST`改为当前节点0地址，`MODE`设为`"dspark-eager"`，模型目录及TP/DP与运行服务一致。只运行：
+
+~~~bash
+cd /home/tyj/glm52/sglang
+python3 devtools/glm52_ms1/two_node_colocated/run_tests.py prepare --dataset gsm8k
+python3 devtools/glm52_ms1/two_node_colocated/run_tests.py accuracy --dataset gsm8k
+~~~
+
+这只准备和读取仓库自带的GSM8K十题，不检查GPQA文件，不需要联网下载或EvalScope。`prepare`完成后再执行`accuracy`；每题串行、temperature=0、最多4096输出token，尊重EOS。客户端继续调用已有bench_serving及A/P/N采集、评分，不改变服务计算。
+
+先看`DATASET_COLLECTED`、十题完成情况、`correct`、截断/未解析数量及`Acceptance`。这是小样本功能/精度与接受率观察，不能作为压力>50%的准出。首组完整后再切target-only eager，以同样十题和预算补对照；再验证graph。任何请求失败先保留对应`summary.json`并定位，不追加GPQA或128k压测。后续恢复GPQA时用`--dataset gpqa`单独准备/运行，或不填该参数按下面的双数据集流程处理。
 
 在节点0**容器客户端终端**执行：
 
