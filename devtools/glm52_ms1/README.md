@@ -356,6 +356,7 @@ git pull
 |---|---|
 | single_dspark_static.sh | 当前单机完整启动脚本 |
 | two_node_dspark_static.sh | 当前双机混部完整启动脚本 |
+| run_gsm8k_single.sh | 单机服务启动后的GSM8K十题入口；只需让顶部MODE与服务一致，然后直接运行 |
 | with_kernel_checkout.py | 两个启动脚本内部使用的192维算子加载工具，无需单独操作 |
 | bench_gsm8k_modes.py / GSM8K_MODES.md | 已有单机GSM8K十题客户端及协议；旧launch配置方法已由本页两个脚本替代 |
 | bench_gsp_prefix.py / GSP_PREFIX.md | 已有单机131072/1024三档缓存诊断客户端及协议 |
