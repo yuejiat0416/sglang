@@ -7,12 +7,16 @@
 
 import argparse
 import json
+import os
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 # 直接编辑这里；不需要另写JSON、Shell变量或长命令。
 MODE = "dspark-eager"  # dspark-eager / dspark-graph / target-eager / target-graph / nextn-graph
-HOST = "61.47.19.71"  # 节点0的服务地址；客户端不连接节点1
+HOST = "61.47.19.68"  # 节点0的服务地址；客户端不连接节点1
 PORT = 8810
 TARGET_MODEL = "/home/weights/GLM-5.2-w8a8"
 DRAFT_MODEL = "/home/weights/GLM-5.2-DSpark-NPU-0805"
@@ -20,13 +24,13 @@ SERVED_MODEL_NAME = "GLM-5.2-w8a8"
 DATASETS = "/home/tyj/glm52-ms1/datasets"
 RESULTS = "/home/tyj/glm52-ms1/dual-node-validation-20260910"  # 同一轮五组使用相同目录
 TP_SIZE = 32
-DP_SIZE = 8
+DP_SIZE = 4
 ACCURACY_MAX_TOKENS = 4096  # 两数据集、所有模式保持一致；截断不记正确
 GSM8K_LIMIT = 10  # 10=当前十题；100=前100题；1319=官方test全量
 # 超过10题时填完整路径，如 /home/tyj/glm52-ms1/datasets/gsm8k-test.jsonl
 GSM8K_SOURCE = ""
-PERFORMANCE_REQUESTS = 64  # 每种命中率64条；不是三档总共64条
-PERFORMANCE_CONCURRENCY = 8  # 同时最多8条，每个DP固定一路
+PERFORMANCE_REQUESTS = 64  # 每种共享前缀比例64条；实际缓存命中看原生cache report
+PERFORMANCE_CONCURRENCY = 4  # 同时最多4条，按服务本身的路由调度
 
 
 def settings():
@@ -129,6 +133,123 @@ def accuracy(cfg, datasets=("gsm8k", "gpqa")):
     return 0
 
 
+def native_gsp(cfg, action):
+    """Run the unmodified community CLI; no custom prompts, routing or hooks."""
+    from client_common import REPO, prepare_run
+
+    run = prepare_run(cfg, "gsp-native", MODE)
+    # Two rounds through the configured DP workers, without pinning requests.
+    count = 2 * DP_SIZE if action == "quick" else PERFORMANCE_REQUESTS
+    concurrency = 1 if action == "quick" else PERFORMANCE_CONCURRENCY
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO / "python") + os.pathsep + env.get("PYTHONPATH", "")
+    env.update(
+        HF_HUB_OFFLINE="1",
+        TRANSFORMERS_OFFLINE="1",
+        NO_PROXY="*",
+        no_proxy="*",
+        PYTHONUNBUFFERED="1",
+    )
+    print(
+        f"原生GSP：每档{count}条，并发{concurrency}；每档开始会清理服务缓存。",
+        flush=True,
+    )
+    print(
+        "0/50/90是共享前缀比例；实际命中看cache_report，Accept length不是A/P接受率。",
+        flush=True,
+    )
+    for percent, prefix in ((0, 0), (50, 65536), (90, 117964)):
+        command = [
+            sys.executable,
+            "-m",
+            "sglang.benchmark.serving",
+            "--backend",
+            "sglang",
+            "--host",
+            HOST,
+            "--port",
+            str(PORT),
+            "--model",
+            TARGET_MODEL,
+            "--tokenizer",
+            TARGET_MODEL,
+            "--dataset-name",
+            "generated-shared-prefix",
+            "--gsp-num-groups",
+            "1",
+            "--gsp-prompts-per-group",
+            str(count),
+            "--gsp-system-prompt-len",
+            str(prefix),
+            "--gsp-question-len",
+            str(131072 - prefix),
+            "--gsp-output-len",
+            "1024",
+            "--gsp-range-ratio",
+            "1",
+            "--num-prompts",
+            str(count),
+            "--max-concurrency",
+            str(concurrency),
+            "--request-rate",
+            "inf",
+            "--seed",
+            "42",
+            "--temperature",
+            "0",
+            "--warmup-requests",
+            "0",
+            "--flush-cache",
+            "--cache-report",
+            "--output-details",
+            "--output-file",
+            str(run / f"prefix{percent}.jsonl"),
+        ]
+        rendered = shlex.join(command)
+        (run / f"prefix{percent}.command.txt").write_text(rendered + "\n")
+        print(rendered, flush=True)
+        with (run / f"prefix{percent}.log").open("w") as log:
+            with subprocess.Popen(
+                command,
+                cwd=REPO,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            ) as process:
+                try:
+                    for line in process.stdout:
+                        print(line, end="", flush=True)
+                        log.write(line)
+                        log.flush()
+                    code = process.wait()
+                except BaseException:
+                    process.terminate()
+                    raise
+        if code:
+            print(f"原生benchmark退出码{code}；停止后续档位。结果：{run}", flush=True)
+            return code
+        # Native CLI can exit zero even if requests fail. Do not run the next
+        # long case after incomplete generation; retain the original output.
+        result = json.loads(
+            (run / f"prefix{percent}.jsonl").read_text().splitlines()[-1]
+        )
+        if (
+            result.get("completed") != count
+            or len(result.get("output_lens", [])) != count
+            or any(n != 1024 for n in result["output_lens"])
+            or any(result.get("errors", []))
+        ):
+            print(
+                f"prefix{percent}存在失败或不足1024的输出；停止。结果：{run}",
+                flush=True,
+            )
+            return 1
+    print(f"原生GSP三档完成。结果：{run}", flush=True)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -155,17 +276,18 @@ def main(argv=None):
         print(f"当前：{MODE}；节点0：{cfg['base_url']}；结果：{RESULTS}", flush=True)
         if args.action == "accuracy":
             return accuracy(cfg, datasets)
+        if args.action in ("quick", "performance"):
+            return native_gsp(cfg, args.action)
         from bench_prefix import run
 
-        quick = args.action == "quick"
         arguments = SimpleNamespace(
-            action="load" if args.action == "performance" else args.action,
+            action="check",
             mode=MODE,
             cache_hit="all",
             seed=42,
             duration_seconds=None,
-            num_prompts=1 if quick else PERFORMANCE_REQUESTS,
-            concurrency=1 if quick else PERFORMANCE_CONCURRENCY,
+            num_prompts=PERFORMANCE_REQUESTS,
+            concurrency=PERFORMANCE_CONCURRENCY,
         )
         return run(arguments, config=cfg)
     except (ValueError, OSError) as exc:

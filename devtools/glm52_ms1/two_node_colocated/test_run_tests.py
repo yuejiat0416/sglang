@@ -2,41 +2,101 @@
 
 import copy
 import json
+import shlex
 
-import pytest
-
-import bench_prefix
 import bench_accuracy
+import bench_prefix
+import client_common
+import pytest
 import run_tests
-from report import campaign_report, compare_performance, latest_attempts
 from config import MODES
+from report import campaign_report, compare_performance, latest_attempts
 
 
-@pytest.mark.parametrize(
-    "action,count,concurrency,stage",
-    [
-        ("check", 64, 8, "check"),
-        ("quick", 1, 1, "quick"),
-        ("performance", 64, 8, "load"),
-    ],
-)
-def test_entry_uses_existing_prefix_client_without_json(
-    monkeypatch, action, count, concurrency, stage
-):
+def test_check_still_only_uses_read_only_capacity_client(monkeypatch):
     seen = []
     monkeypatch.setattr(
         bench_prefix, "run", lambda args, config: seen.append((args, config)) or 0
     )
-    assert run_tests.main([action]) == 0
+    assert run_tests.main(["check"]) == 0
     args, cfg = seen[0]
     assert (args.num_prompts, args.concurrency, args.action) == (
-        count,
-        concurrency,
-        stage,
+        64,
+        4,
+        "check",
     )
     assert args.cache_hit == "all" and args.duration_seconds is None
     assert not hasattr(args, "config")
-    assert cfg["base_url"] == "http://61.47.19.71:8810"
+    assert cfg["base_url"] == "http://61.47.19.68:8810"
+
+
+@pytest.mark.parametrize(
+    "action,count,concurrency", [("quick", 8, 1), ("performance", 64, 4)]
+)
+@pytest.mark.parametrize("failure", ["none", "exit", "request", "short"])
+def test_native_cli_subprocess_outputs_and_failure_stop(
+    tmp_path, monkeypatch, action, count, concurrency, failure
+):
+    # Exercise the real subprocess boundary with a tiny CLI stand-in. This
+    # deliberately cannot import a tokenizer, old client or NPU package.
+    repo = tmp_path / "checkout"
+    package = repo / "python/sglang/benchmark"
+    package.mkdir(parents=True)
+    (package.parent / "__init__.py").touch()
+    (package / "__init__.py").touch()
+    (package / "serving.py").write_text("""
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+def arg(name): return args[args.index(name) + 1]
+count = int(arg("--num-prompts"))
+failure = os.environ["TEST_NATIVE_FAILURE"]
+print("native child executed", flush=True)
+if failure == "exit": sys.exit(7)
+record = {"completed": count, "output_lens": [1024] * count, "errors": [""] * count}
+if failure == "request":
+    record["completed"] -= 1
+    record["errors"][0] = "request failed"
+if failure == "short": record["output_lens"][0] = 512
+Path(arg("--output-file")).write_text(json.dumps(record) + "\\n")
+""")
+    monkeypatch.setattr(client_common, "REPO", repo)
+    monkeypatch.setattr(run_tests, "RESULTS", str(tmp_path / "results"))
+    monkeypatch.setenv("TEST_NATIVE_FAILURE", failure)
+
+    def unexpected_run(*args, **kwargs):
+        raise AssertionError("Native benchmark must not enter custom GSP client")
+
+    monkeypatch.setattr(bench_prefix, "run", unexpected_run)
+    expected = {"none": 0, "exit": 7, "request": 1, "short": 1}[failure]
+    assert run_tests.main([action]) == expected
+    runs = list((tmp_path / "results/evidence/two-node-colocated").iterdir())
+    assert len(runs) == 1
+    commands = sorted(runs[0].glob("*.command.txt"))
+    assert len(commands) == (3 if failure == "none" else 1)
+    for path in commands:
+        argv = shlex.split(path.read_text())
+        assert argv[1:3] == ["-m", "sglang.benchmark.serving"]
+
+        def value(flag):
+            return argv[argv.index(flag) + 1]
+
+        assert value("--dataset-name") == "generated-shared-prefix"
+        assert value("--num-prompts") == value("--gsp-prompts-per-group") == str(count)
+        assert value("--max-concurrency") == str(concurrency)
+        assert (
+            int(value("--gsp-system-prompt-len")) + int(value("--gsp-question-len"))
+            == 131072
+        )
+        assert value("--warmup-requests") == "0" and "--flush-cache" in argv
+        assert not any(
+            x in argv
+            for x in ("--extra-request-body", "--disable-stream", "--tokenize-prompt")
+        )
+        assert (
+            "native child executed"
+            in path.with_name(path.name.replace(".command.txt", ".log")).read_text()
+        )
 
 
 def test_prepare_never_replaces_a_different_sample(tmp_path, monkeypatch):
@@ -195,7 +255,7 @@ def test_accuracy_keeps_datasets_separate_and_stops_after_failure(
 
     def run(args, cfg):
         seen.append(args)
-        assert cfg["tp_size"] == 32 and cfg["dp_size"] == 8
+        assert cfg["tp_size"] == 32 and cfg["dp_size"] == 4
         return first_result if len(seen) == 1 else 0
 
     monkeypatch.setattr(bench_accuracy, "run", run)
