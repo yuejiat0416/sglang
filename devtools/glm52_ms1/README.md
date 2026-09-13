@@ -689,7 +689,15 @@ bash devtools/glm52_ms1/two_node_dspark_static.sh 2>&1 | tee /home/tyj/glm52-ms1
 
 #### 第二步：在68另开客户端终端，跑一次全量
 
-客户端复用已有`/home/tyj/glm52-ms1/evalscope-venv`的EvalScope 1.11.1；服务进程继续使用镜像Python。将本轮更新的[run_gpqa_diamond.py](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/devtools/glm52_ms1/run_gpqa_diamond.py)上传到**68**的`/home/tyj/glm52/sglang/devtools/glm52_ms1/`覆盖同名文件（SFTP/Xftp即可）；本轮未推送，git pull不会取得这份更新。它顶部已设`GRAPH=True`、地址68，复用同目录原有`gsm8k_mode_stats.py`分析图计数。不整仓覆盖现场启动脚本，也不改旧run_tests.py的十题设置。
+客户端复用已有`/home/tyj/glm52-ms1/evalscope-venv`的EvalScope 1.11.1；服务进程继续使用镜像Python。本轮工具已经推到个人`sync/glm52-dspark-ms1`。因为服务器上的双机启动脚本有手工调整，不直接pull覆盖现场；在**68容器的客户端终端**只更新本次需要的GPQA文件：
+
+~~~bash
+cd /home/tyj/glm52/sglang
+git fetch origin sync/glm52-dspark-ms1
+git restore --source origin/sync/glm52-dspark-ms1 -- devtools/glm52_ms1/run_gpqa_diamond.py
+~~~
+
+它顶部已设`GRAPH=True`、地址68，复用同目录原有`gsm8k_mode_stats.py`分析图计数。不改旧run_tests.py的十题设置，也不改两台现场启动脚本。
 
 数据沿用[9.1](#step9)从GPQA作者仓库取得的`/home/tyj/glm52-ms1/datasets/gpqa_diamond.csv`。必须是完整198题的Diamond原始CSV，不能使用gpqa-20.json或仅20行CSV。只需在68准备，题目不传70。测试脚本先核对198个唯一题目和必需字段；在自己的输出目录内部复制为独立CSV目录，供EvalScope原生loader读取。实际检查确认直接CSV文件路径会失败，父目录又混有GSM文件，因此内部复制是必要的最小处理，不增加用户步骤或手写配置。
 
@@ -727,7 +735,7 @@ cd /home/tyj/glm52/sglang
 
 如果精度和接受率都通过，保存本轮资料后再进入性能对比；精度偏低先查看截断/原始回答与协议，必要时同题同参数做target-only对照；精度通过但接受率≤0.5时看gamma5的真实长度与请求分布，不改分母或重跑择优；启动/请求/依赖失败则先修对应故障，未完成的运行不计为精度失败或成功。参考[EvalScope官方API与本地数据说明](https://evalscope.readthedocs.io/en/latest/get_started/basic_usage.html)。
 
-本地验证：既有CSV加载与SDK回调检查保留为上轮证据；本轮增加graph模式、计数缺失/回退/重置检查，详见[实际diff和逐项审视](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-10-two-node-colocated-tests/README.md:3)。NPU全量、实际精度、接受率及graph回放待负责人实测；当前为本地文件交付，未提交/推送。
+本地验证：既有CSV加载与SDK回调检查保留为上轮证据；本轮增加graph模式、计数缺失/回退/重置检查，详见[实际diff和逐项审视](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-10-two-node-colocated-tests/README.md:3)。NPU全量、实际精度、接受率及graph回放待负责人实测；工具提交`53adfe7c35`已推到个人sync分支，随后仅补运行文档。
 
 <a id="step10"></a>
 ## 10. 精度对照：四组十题流程，全量前固定同一协议
