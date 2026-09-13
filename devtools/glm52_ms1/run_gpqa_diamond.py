@@ -26,7 +26,7 @@ CONCURRENCY = 4
 MAX_TOKENS = 65536
 TEMPERATURE = 1.0
 TIMEOUT = 7200  # 非流式保留服务端原始接受计数，允许长推理等待。
-GAMMA = 5
+GAMMA = 4
 QUESTIONS = 198
 
 
@@ -127,7 +127,7 @@ def response_counts(response):
     if any(type(v) is not int or v < 0 for v in (a, p, n)):
         raise ValueError("服务端 A/P/N 必须是非负整数")
     if a > p or p != GAMMA * n:
-        raise ValueError(f"非本轮gamma5计数：A={a}, P={p}, N={n}")
+        raise ValueError(f"非本轮gamma{GAMMA}计数：A={a}, P={p}, N={n}")
     histogram = details.get("spec_correct_drafts_histogram")
     if histogram is not None and (
         not isinstance(histogram, list)
@@ -193,7 +193,7 @@ def summarize(report, records):
         raise ValueError("推理计数日志不是198个唯一响应，不能作完整判定")
     a, p, n = (sum(r[k] for r in records) for k in ("A", "P", "N"))
     if p <= 0 or p != GAMMA * n:
-        raise ValueError("完整运行没有有效gamma5接受计数")
+        raise ValueError(f"完整运行没有有效gamma{GAMMA}接受计数")
     percent = 100 * correct / QUESTIONS
     accuracy_pass = 90.2 <= percent <= 92.2
     acceptance_pass = 2 * a > p  # 严格>0.5，不能比较已四舍五入的日志。
@@ -240,7 +240,9 @@ def main():
         return 0
     Path(RESULTS).mkdir(parents=True, exist_ok=True)
     mode = "graph" if GRAPH else "eager"
-    output = Path(tempfile.mkdtemp(prefix=f"gpqa-d-{mode}-gamma5-", dir=RESULTS))
+    output = Path(
+        tempfile.mkdtemp(prefix=f"gpqa-d-{mode}-gamma{GAMMA}-", dir=RESULTS)
+    )
     print(f"本轮结果目录：{output}", flush=True)
     # EvalScope原生loader需要独立数据目录；内部复制，不要求用户另行准备。
     local_data = output / "dataset"

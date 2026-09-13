@@ -1,6 +1,6 @@
 # GLM-5.2：从新机器到单双机启动、双机跑测与DeepEP预案
 
-**2026-09-13当前执行：A3 68/70双机、TP32/DP4、DSpark static graph，gamma5、verify6，使用EvalScope 1.11.1跑GPQA-Diamond全部198题并采集接受计数及图证据。完整顺序见[9.6](#gpqa-full-current)。** 复用已准备的全量脚本，不运行GSM8K或GSP。以下68/69、十题/20题与GPQA暂停描述均为历史阶段；精度91.2%±1个百分点与接受率严格>0.5沿用此前自测参考，并非本轮实测结论。
+**2026-09-13当前执行：A3 68/70双机、TP32/DP4、DSpark static graph，gamma4、verify5，使用EvalScope 1.11.1跑GPQA-Diamond全部198题并采集接受计数及图证据。完整顺序见[9.6](#gpqa-full-current)。** 复用已准备的全量脚本，不运行GSM8K或GSP。以下68/69、十题/20题与GPQA暂停描述均为历史阶段；精度91.2%±1个百分点与接受率严格>0.5沿用此前自测参考，并非本轮实测结论。
 
 此前精度安排：GSM8K取20题、GPQA-Diamond取20题，分别运行和评分，操作保留在[9.5](#accuracy-twenty)。各模式使用同样的20题和输出预算。该流程不是本轮全量EvalScope入口。
 
@@ -627,21 +627,21 @@ python3 devtools/glm52_ms1/two_node_colocated/run_tests.py accuracy --dataset gp
 <a id="gpqa-full-current"></a>
 ### 9.6 当前：68/70双机、DSpark graph、EvalScope全量GPQA-D
 
-**2026-09-13当前顺序**：按负责人要求直接跑graph全量，跳过十题GSM8K。使用68为node0、70为node1，TP32/DP4、static、沿用已准备的gamma5/verify6配方。GPQA-Diamond全量为198题（不是GPQA其它子集），同一次EvalScope运行同时评分和采集A/P/N。NPU操作由负责人执行；尚未取得本轮graph实机结果。
+**2026-09-13当前顺序**：按负责人要求直接跑graph全量，跳过十题GSM8K。使用68为node0、70为node1，TP32/DP4、static；当前把draft候选数从gamma5降为gamma4，对应Target verify总宽度从6降为5。GPQA-Diamond全量为198题（不是GPQA其它子集），同一次EvalScope运行同时评分和采集A/P/N。NPU操作由负责人执行；尚未取得本轮graph实机结果。
 
-#### 为什么原来是8，本次为什么同时改5和6
+#### 为什么gamma4必须与verify5一起修改
 
-0805草稿制品的`block_size=8`被解析为默认gamma=8。它不是从accept len推导出的最优值，也不是A3或双机强制要求。当前源码允许CLI覆盖：`--speculative-dspark-block-size`优先确定gamma，`--speculative-num-draft-tokens`必须等于gamma+1；只改其中一个会发生冲突。**本次同时设置5和6，不改权重config.json。** 启动时可能看到checkpoint gamma8与运行gamma5不一致的warning，这是显式覆盖的预期提示；仍需看到服务ready且客户端核准5/6。
+0805草稿制品的`block_size=8`被解析为默认gamma=8。它不是从accept len推导出的最优值，也不是A3或双机强制要求。当前源码允许CLI覆盖：`--speculative-dspark-block-size`优先确定gamma，`--speculative-num-draft-tokens`必须等于gamma+1；只改其中一个会发生冲突。**本次同时设置4和5，不改权重config.json。** 启动时可能看到checkpoint gamma8与运行gamma4不一致的warning，这是显式覆盖的预期提示；仍需看到服务ready且客户端核准4/5。
 
-这处改动处于**配置→draft proposal→target verify→accept/commit**：gamma5每轮产生5个草稿候选，Target验证输入为anchor+5候选，共6行。全部接受时最多输出5个草稿token和1个bonus；提前拒绝时，额外的target token是纠正token。验证输入的anchor与新输出的bonus不是同一个token。
+这处改动处于**配置→draft proposal→target verify→accept/commit**：gamma4每轮产生4个草稿候选，Target验证输入为anchor+4候选，共5行。全部接受时最多输出4个草稿token和1个bonus；提前拒绝时，额外的target token是纠正token。验证输入的anchor与新输出的bonus不是同一个token。
 
 依据当前sync基线`35edd9ec4b5a7329fcccf85dc71c248a2fa71353`：[配置优先级及gamma+1校验](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/arg_groups/speculative_hook.py:627)、[运行时显式覆盖](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/speculative/dspark_components/dspark_config.py:108)。学习手册[17.2 gamma的名称合同](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:3449)帮助区分两种计数，[18.2/18.3 草稿与静态验证](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:3575)解释每轮的输入和输出。教材是integration概念快照，本轮参数合同以此sync源码为准。
 
-若N为请求×验证轮数，A为被接受草稿token总数，static gamma固定时P=gamma×N。服务日志的平均接受长度`L=1+A/N`，接受率`R=A/P=(L-1)/gamma`。原gamma8、L约3.5对应31.25%；改gamma5后**若L仍为3.5，恰好50%，还没通过严格>0.5**。新配置需要L>3.5；L必须重新实测，不能保证缩短窗口后保持原值。缩短窗口可能减少无效候选计算，是否加速另行实测。本轮不把接受率提高等同于模型能力或性能提高。
+若N为请求×验证轮数，A为被接受草稿token总数，static gamma固定时P=gamma×N。服务日志的平均接受长度`L=1+A/N`，接受率`R=A/P=(L-1)/gamma`。gamma4需要`L>3.0`才能满足严格`R>0.5`。缩短gamma会同时改变接受率分母和每轮最多提交的token数，因此gamma4的接受率不能直接与gamma5比较；是否加速必须另行实测。
 
 #### 第一步：两端修改已有启动脚本并启动graph
 
-**不要用仓库模板覆盖服务器已跑通的.sh。** 保留已经跑通的DP4显存/分块参数、context/KV133120、max-running-requests4、DeepEP和192 overlay；70也使用相同代码、模型制品和有效网卡。只更新节点地址、graph开关，并核对gamma5/verify6。
+**不要用仓库模板覆盖服务器已跑通的.sh。** 保留已经跑通的DP4显存/分块参数、context/KV133120、max-running-requests4、DeepEP和192 overlay；70也使用相同代码、模型制品和有效网卡。只更新节点地址、graph开关，并核对gamma4/verify5。
 
 等旧客户端结束，在两台**服务终端**停止本次旧服务。然后在68和70的服务容器分别打开同一个文件：
 
@@ -659,13 +659,13 @@ NODE0_HOST='61.47.19.68'
 NODE1_HOST='61.47.19.70'
 ~~~
 
-DSpark分支保留`--speculative-dspark-block-size 5 --speculative-num-draft-tokens 6`。若现场仍是8/9，把这两个值同时改为5/6，与本轮全量工具一致；不修改NEXTN分支。在后半段含`--cuda-graph-bs`的行把16改8：
+DSpark分支设置`--speculative-dspark-block-size 4 --speculative-num-draft-tokens 5`。若现场仍是5/6或8/9，把这两个值同时改为4/5，与本轮全量工具一致；不修改NEXTN分支。在后半段含`--cuda-graph-bs`的行把16改8：
 
 ~~~bash
 if [ "$GRAPH" = 1 ]; then SERVER_ARGS+=(--cuda-graph-bs 8); else SERVER_ARGS+=(--disable-cuda-graph); fi
 ~~~
 
-保留`ENABLE_METRICS=1`。按`Esc`、输入`:wq`、回车保存。TP32/DP4的Attention TP为8；本轮Target宽6、Draft宽5，bs8可满足两种宽度的8行对齐，实际捕图列表还会受runtime约束。不再套用上一轮gamma8、Target宽9时的最小档位推导。static由`SGLANG_RAGGED_VERIFY_MODE=static`设置，P=5N本身不能证明static模式。
+保留`ENABLE_METRICS=1`。按`Esc`、输入`:wq`、回车保存。TP32/DP4的Attention TP为8；本轮Target宽5、Draft宽4，bs8覆盖两条图的对齐档位，实际捕图列表还会受runtime约束。static由`SGLANG_RAGGED_VERIFY_MODE=static`设置，P=4N本身不能证明static模式。
 
 在**68服务容器**启动并保存本次服务日志：
 
@@ -673,7 +673,7 @@ if [ "$GRAPH" = 1 ]; then SERVER_ARGS+=(--cuda-graph-bs 8); else SERVER_ARGS+=(-
 cd /home/tyj/glm52/sglang
 mkdir -p /home/tyj/glm52-ms1/evidence
 set -o pipefail
-bash devtools/glm52_ms1/two_node_dspark_static.sh 2>&1 | tee /home/tyj/glm52-ms1/evidence/server-gpqa-gamma5-node0.log
+bash devtools/glm52_ms1/two_node_dspark_static.sh 2>&1 | tee /home/tyj/glm52-ms1/evidence/server-gpqa-gamma4-node0.log
 ~~~
 
 在**70服务容器**运行：
@@ -682,7 +682,7 @@ bash devtools/glm52_ms1/two_node_dspark_static.sh 2>&1 | tee /home/tyj/glm52-ms1
 cd /home/tyj/glm52/sglang
 mkdir -p /home/tyj/glm52-ms1/evidence
 set -o pipefail
-bash devtools/glm52_ms1/two_node_dspark_static.sh 2>&1 | tee /home/tyj/glm52-ms1/evidence/server-gpqa-gamma5-node1.log
+bash devtools/glm52_ms1/two_node_dspark_static.sh 2>&1 | tee /home/tyj/glm52-ms1/evidence/server-gpqa-gamma4-node1.log
 ~~~
 
 服务占用终端是正常的。68启动后就启动70，不要等68ready才启动70。查看`Capture target verify NPU graph ... end`和`Capture draft verify NPU graph ... end`，等68显示ready再进入第二步。若捕图OOM/通信异常，先处理第一处错误，不直接调大mem fraction。同名服务日志会由tee重写；若重跑，先保留上次两份日志。
@@ -733,7 +733,7 @@ cd /home/tyj/glm52/sglang
 
 #### 第三步：读精度和接受率，决定下一步
 
-脚本开始和结束均打印本次目录：`/home/tyj/glm52-ms1/evidence/gpqa-d-graph-gamma5-…/`，每次自动新建，不会把旧回答当本轮结果。目录中：
+脚本开始和结束均打印本次目录：`/home/tyj/glm52-ms1/evidence/gpqa-d-graph-gamma4-…/`，每次自动新建，不会把旧回答当本轮结果。目录中：
 
 - `summary.json`：198题完成情况、正确数、精度、A/P/N、接受率、接受长度、length结束数，以及两个独立判定。
 - `inference.jsonl`：同次198个唯一响应的服务端原始接受计数，含response_id，可关联EvalScope原始回答。按请求完整计数覆盖尾轮和各DP，不重复累计TP副本。
@@ -744,7 +744,7 @@ cd /home/tyj/glm52/sglang
 
 同时查看**两端服务终端**的`accept len: …, accept rate: …`日志。它们是各DP周期观察，只保留两位小数、可能漏掉未输出的最后统计窗口；不要直接平均各行或各DP，也不要将`0.50`当严格通过。最终全程结论以本轮`inference.jsonl`里的服务端计数汇总为准，不用completion_tokens反推。源码见[日志公式](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/managers/scheduler_components/metrics_reporter.py:896)、[响应计数入口](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/entrypoints/openai/utils.py:158)；学习[28.9/28.10 接受率与采集陷阱](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4780)解释为何不能只看长度或平均百分比。
 
-如果精度和接受率都通过，保存本轮资料后再进入性能对比；精度偏低先查看截断/原始回答与协议，必要时同题同参数做target-only对照；精度通过但接受率≤0.5时看gamma5的真实长度与请求分布，不改分母或重跑择优；启动/请求/依赖失败则先修对应故障，未完成的运行不计为精度失败或成功。参考[EvalScope官方API与本地数据说明](https://evalscope.readthedocs.io/en/latest/get_started/basic_usage.html)。
+如果精度和接受率都通过，保存本轮资料后再进入性能对比；精度偏低先查看截断/原始回答与协议，必要时同题同参数做target-only对照；精度通过但接受率≤0.5时看gamma4的真实长度与请求分布，不改分母或重跑择优；启动/请求/依赖失败则先修对应故障，未完成的运行不计为精度失败或成功。参考[EvalScope官方API与本地数据说明](https://evalscope.readthedocs.io/en/latest/get_started/basic_usage.html)。
 
 本地验证：既有CSV加载与SDK回调检查保留为上轮证据；本轮增加graph模式、计数缺失/回退/重置检查，详见[实际diff和逐项审视](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-10-two-node-colocated-tests/README.md:3)。NPU全量、实际精度、接受率及graph回放待负责人实测；工具提交`53adfe7c35`已推到个人sync分支，随后仅补运行文档。
 

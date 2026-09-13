@@ -123,7 +123,7 @@ if [ "$MODE" = dspark ]; then
   SERVER_ARGS+=(
     --speculative-algorithm DSPARK --speculative-draft-model-path "$DRAFT_MODEL"
     --speculative-draft-model-quantization unquant --speculative-draft-attention-backend ascend
-    --speculative-dspark-block-size 5 --speculative-num-draft-tokens 6
+    --speculative-dspark-block-size 4 --speculative-num-draft-tokens 5
   )
 elif [ "$MODE" = nextn ]; then
   SERVER_ARGS+=(

@@ -16,7 +16,7 @@ def response(index=0, histogram=None):
         "sglext": {
             "spec_tokens_details": {
                 "spec_num_correct_drafts": sum(i * x for i, x in enumerate(histogram)),
-                "spec_num_proposed_drafts": 5 * n,
+                "spec_num_proposed_drafts": runner.GAMMA * n,
                 "spec_verify_ct": n,
                 "spec_correct_drafts_histogram": histogram,
             }
@@ -57,7 +57,7 @@ def test_accuracy_boundaries_on_single_full_set(correct, passed):
 
 
 @pytest.mark.parametrize(
-    "histogram,passed", [([0, 0, 1, 1], False), ([0, 0, 1, 2], True), ([1], False)]
+    "histogram,passed", [([0, 0, 2], False), ([0, 0, 1, 1], True), ([1], False)]
 )
 def test_strict_acceptance_uses_integer_counts_and_short_histograms(histogram, passed):
     result = runner.summarize(report(), records(histogram))
@@ -66,9 +66,9 @@ def test_strict_acceptance_uses_integer_counts_and_short_histograms(histogram, p
 
 def test_sum_counts_not_mean_of_request_rates():
     rows = records([1])  # 197 short requests with no accepted drafts
-    rows[0] = runner.response_counts(response(0, [0, 0, 0, 0, 0, 1000]))
+    rows[0] = runner.response_counts(response(0, [0, 0, 0, 0, 1000]))
     result = runner.summarize(report(), rows)
-    assert result["A"] == 5000 and result["P"] == 5985
+    assert result["A"] == 4000 and result["P"] == 4788
     assert result["acceptance_pass"] is True
 
 
@@ -156,8 +156,8 @@ def test_wrong_window_fails_before_evaluation():
         dp_size=4,
         served_model_name=runner.MODEL,
         speculative_algorithm="DSPARK",
-        speculative_dspark_block_size=5,
-        speculative_num_draft_tokens=6,
+        speculative_dspark_block_size=4,
+        speculative_num_draft_tokens=5,
         context_length=133120,
         cuda_graph_config={"decode": {"backend": "full"}},
         enable_metrics=True,
@@ -177,8 +177,8 @@ def test_graph_run_rejects_disabled_or_unknown_backend(backend):
         dp_size=4,
         served_model_name=runner.MODEL,
         speculative_algorithm="DSPARK",
-        speculative_dspark_block_size=5,
-        speculative_num_draft_tokens=6,
+        speculative_dspark_block_size=4,
+        speculative_num_draft_tokens=5,
         context_length=133120,
         cuda_graph_config={"decode": {"backend": backend}},
     )
@@ -224,8 +224,8 @@ def test_missing_metrics_is_rejected_before_full_evaluation():
         dp_size=4,
         served_model_name=runner.MODEL,
         speculative_algorithm="DSPARK",
-        speculative_dspark_block_size=5,
-        speculative_num_draft_tokens=6,
+        speculative_dspark_block_size=4,
+        speculative_num_draft_tokens=5,
         context_length=133120,
         cuda_graph_config={"decode": {"backend": "full"}},
     )
