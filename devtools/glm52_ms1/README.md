@@ -689,7 +689,7 @@ bash devtools/glm52_ms1/two_node_dspark_static.sh 2>&1 | tee /home/tyj/glm52-ms1
 
 #### 第二步：在68另开客户端终端，跑一次全量
 
-客户端复用已有`/home/tyj/glm52-ms1/evalscope-venv`的EvalScope 1.11.1；服务进程继续使用镜像Python。本轮工具已经推到个人`sync/glm52-dspark-ms1`。因为服务器上的双机启动脚本有手工调整，不直接pull覆盖现场；在**68容器的客户端终端**只更新本次需要的GPQA文件：
+客户端使用`/home/tyj/glm52-ms1/evalscope-venv`中的EvalScope 1.11.1；服务进程继续使用镜像Python。本轮工具已经推到个人`sync/glm52-dspark-ms1`。因为服务器上的双机启动脚本有手工调整，不直接pull覆盖现场；在**68容器的客户端终端**只更新本次需要的GPQA文件：
 
 ~~~bash
 cd /home/tyj/glm52/sglang
@@ -698,6 +698,17 @@ git restore --source origin/sync/glm52-dspark-ms1 -- devtools/glm52_ms1/run_gpqa
 ~~~
 
 它顶部已设`GRAPH=True`、地址68，复用同目录原有`gsm8k_mode_stats.py`分析图计数。不改旧run_tests.py的十题设置，也不改两台现场启动脚本。
+
+若执行评测命令时报`/home/tyj/glm52-ms1/evalscope-venv/bin/python: No such file or directory`，说明当前68容器还没有这套客户端环境。在**68容器的客户端终端**直接执行下面四条命令；使用阿里PyPI镜像，只安装到独立目录，不修改服务Python，也不需要停止双机服务：
+
+~~~bash
+mkdir -p /home/tyj/glm52-ms1
+python3 -m venv /home/tyj/glm52-ms1/evalscope-venv
+/home/tyj/glm52-ms1/evalscope-venv/bin/python -m pip install -i https://mirrors.aliyun.com/pypi/simple evalscope==1.11.1
+/home/tyj/glm52-ms1/evalscope-venv/bin/python -c "from evalscope import TaskConfig, run_task; print('EvalScope 1.11.1 import OK')"
+~~~
+
+最后一行打印`EvalScope 1.11.1 import OK`即表示客户端依赖已经准备好。只在68准备；70仅运行服务，不安装EvalScope。
 
 数据沿用[9.1](#step9)从GPQA作者仓库取得的`/home/tyj/glm52-ms1/datasets/gpqa_diamond.csv`。必须是完整198题的Diamond原始CSV，不能使用gpqa-20.json或仅20行CSV。只需在68准备，题目不传70。测试脚本先核对198个唯一题目和必需字段；在自己的输出目录内部复制为独立CSV目录，供EvalScope原生loader读取。实际检查确认直接CSV文件路径会失败，父目录又混有GSM文件，因此内部复制是必要的最小处理，不增加用户步骤或手写配置。
 
