@@ -71,11 +71,38 @@ def test_two_node_modes_and_non_applicable_algorithms(cfg, mode):
         common.validate_server(data, cfg, mode)
 
 
+@pytest.mark.parametrize("mode", ("dspark-eager", "dspark-graph"))
+@pytest.mark.parametrize("block,draft_tokens", ((8, 9), (5, 6)))
+def test_dspark_supported_windows_preserve_reported_values(
+    cfg, mode, block, draft_tokens
+):
+    data = server(cfg, mode)
+    data["speculative_dspark_block_size"] = block
+    data["speculative_num_draft_tokens"] = draft_tokens
+    selected = common.validate_server(data, cfg, mode)
+    assert selected["speculative_dspark_block_size"] == block
+    assert selected["speculative_num_draft_tokens"] == draft_tokens
+
+
+@pytest.mark.parametrize(
+    "block,draft_tokens", ((5, 9), (8, 6), (5, 5), (6, 7), (None, 6), (5, None))
+)
+def test_dspark_inconsistent_or_unsupported_windows_block_traffic(
+    cfg, block, draft_tokens
+):
+    data = server(cfg, "dspark-eager")
+    data["speculative_dspark_block_size"] = block
+    data["speculative_num_draft_tokens"] = draft_tokens
+    with pytest.raises(ValueError, match="DSpark block"):
+        common.validate_server(data, cfg, "dspark-eager")
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
         ("enable_dp_attention", False),
         ("model_path", "/wrong"),
+        ("speculative_draft_model_path", "/wrong-draft"),
         ("quantization", None),
         ("disaggregation_mode", "prefill"),
         ("speculative_num_draft_tokens", 8),

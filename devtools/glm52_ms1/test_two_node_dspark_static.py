@@ -60,7 +60,8 @@ def test_modes_ranks_graph_and_original_recipe(rank, mode, graph):
         assert option(argv, "--cuda-graph-bs") == "16"
     if mode == "dspark":
         assert option(argv, "--speculative-algorithm") == "DSPARK"
-        assert option(argv, "--speculative-num-draft-tokens") == "9"
+        assert option(argv, "--speculative-dspark-block-size") == "5"
+        assert option(argv, "--speculative-num-draft-tokens") == "6"
         assert env["SGLANG_NPU_GLM_DSPARK_QUAROT"] == "original"
     else:
         assert "SGLANG_NPU_GLM_DSPARK_QUAROT" not in env

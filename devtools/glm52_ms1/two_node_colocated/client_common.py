@@ -106,13 +106,16 @@ def validate_server(info, cfg, mode):
     if str(info.get("speculative_algorithm") or "").upper() not in expected:
         raise ValueError("Server algorithm does not match the requested mode")
     if dspark:
-        for key, value in (
-            ("speculative_draft_model_path", cfg["draft_model"]),
-            ("speculative_dspark_block_size", 8),
-            ("speculative_num_draft_tokens", 9),
-        ):
-            if info.get(key) != value:
-                raise ValueError(f"Expected DSpark {key}={value!r}")
+        if info.get("speculative_draft_model_path") != cfg["draft_model"]:
+            raise ValueError(
+                f"Expected DSpark speculative_draft_model_path={cfg['draft_model']!r}"
+            )
+        window = (
+            info.get("speculative_dspark_block_size"),
+            info.get("speculative_num_draft_tokens"),
+        )
+        if window not in ((8, 9), (5, 6)):
+            raise ValueError("Expected DSpark block8/draft9 or block5/draft6")
     if nextn and tuple(
         info.get(k)
         for k in (
