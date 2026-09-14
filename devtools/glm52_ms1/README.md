@@ -11,7 +11,7 @@
 
 **按负责人最新要求，拉代码、准备数据和跑测试都在68的NPU服务器容器内操作。** 68实测无法解析Hugging Face域名，已有代理又在TLS/HTTP阶段断开，所以固定样本现已直接随临时测试分支提供。`git pull`取得样本，`download`只校验并安装到`/home/tyj/glm52-ms1/datasets/glm52-dspark-modelcard-50.json`；它不再访问外网，`run`读取同一文件，不需要另一台电脑或文件搬运。
 
-本轮修复：完整GSM8K test文件此前被`*.jsonl`忽略规则排除，造成新拉代码后找不到文件；现在将同一份1319题原始数据纳入临时分支，SHA256与既有固定来源一致，并保留旁边的`gsm8k-LICENSE.txt`。这同时补齐七数据集下载入口与300题入口的本地依赖，不改模型服务或测试协议。
+本轮修复：完整GSM8K test文件此前被`*.jsonl`忽略规则排除，造成新拉代码后找不到文件；现在将同一份1319题原始数据纳入临时分支，SHA256与既有固定来源一致，并保留旁边的`gsm8k-LICENSE.txt`。七项固定抽样也随分支提供，不改模型服务或测试协议。
 
 先在68的**服务容器客户端终端**执行：
 
@@ -25,7 +25,7 @@ python3 devtools/glm52_ms1/run_modelcard_50_single.py download
 
 固定样本此前从仓库内完整GSM8K test及其余公开数据集生成：每项选择由seed固定的最多100行窗口，再在窗口中无放回抽样。窗口起点、数据行数、实际样本ID和prompt哈希均保留在样本文件中，后续eager/graph复用同一文件。
 
-本轮七数据集入口已默认设为`dspark-graph`；按当前68节点，将`run_modelcard_50_single.py`顶部的`HOST`改为`"61.47.19.68"`。如果服务已经按graph启动，直接运行下方客户端命令。若尚未启动，在服务器的`devtools/glm52_ms1/single_dspark_static.sh`开头将`MODE='dspark'`、`GRAPH=1`、`MS1_HOST='61.47.19.68'`填好，再执行`bash devtools/glm52_ms1/single_dspark_static.sh`；保留草稿块长8、验证输入9。测试脚本只连接服务，不会把eager服务切换成graph。
+本轮七数据集入口已经默认设为`dspark-graph`和`61.47.19.68`，这两项不需要再改。如果服务已经按graph启动，直接运行下方客户端命令。若尚未启动，在服务器的`devtools/glm52_ms1/single_dspark_static.sh`开头将`MODE='dspark'`、`GRAPH=1`、`MS1_HOST='61.47.19.68'`填好，再执行`bash devtools/glm52_ms1/single_dspark_static.sh`；保留草稿块长8、验证输入9。测试脚本只连接服务，不会把eager服务切换成graph。
 
 单机graph服务启动后，在61.47.19.68同一容器另开的**客户端终端**执行：
 
