@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Download and run fixed samples from the DSpark model-card benchmarks.
 
-``download`` runs on an internet-connected PC. ``run`` runs beside an existing
-single-node SGLang service and calls the unchanged serving benchmark.
+Run both ``download`` and ``run`` in the NPU server container. The download
+writes the dataset file that ``run`` reads beside an existing single-node
+SGLang service, using the unchanged serving benchmark.
 """
 
 import argparse
@@ -42,7 +43,6 @@ DRAFT_MODEL = "/home/weights/GLM-5.2-DSpark-NPU-0805"
 SERVED_MODEL_NAME = "GLM-5.2-w8a8"
 STATE = Path("/home/tyj/glm52-ms1")
 SERVER_BUNDLE = STATE / "datasets/glm52-dspark-modelcard-50.json"
-LOCAL_BUNDLE = Path.home() / "Downloads/glm52-dspark-modelcard-50.json"
 MAX_TOKENS = 1024
 CONCURRENCY = 1
 SEED = 42
@@ -286,9 +286,9 @@ def build_bundle(source_rows, source_windows=None):
 def download():
     rows, windows = _load_download_sources()
     bundle = build_bundle(rows, windows)
-    LOCAL_BUNDLE.parent.mkdir(parents=True, exist_ok=True)
-    write_json(LOCAL_BUNDLE, bundle)
-    print(f"已生成：{LOCAL_BUNDLE}")
+    SERVER_BUNDLE.parent.mkdir(parents=True, exist_ok=True)
+    write_json(SERVER_BUNDLE, bundle)
+    print(f"已生成：{SERVER_BUNDLE}")
     for name in DATASET_ORDER:
         print(f"{name}: {bundle['datasets'][name]['actual_samples']}条")
     return 0
@@ -497,7 +497,7 @@ def run():
         raise ValueError(f"不支持的MODE：{MODE}")
     bundle = json.loads(SERVER_BUNDLE.read_text())
     if bundle.get("status") != "MODELCARD_SAMPLE_PREPARED":
-        raise ValueError("样本文件格式不正确，请重新执行download并上传")
+        raise ValueError("样本文件格式不正确，请在本机重新执行download")
     run_id = (
         datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         + "-"

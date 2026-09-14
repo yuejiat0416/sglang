@@ -9,31 +9,34 @@
 
 模型卡列出GSM8K、MATH500、AIME2025、MBPP、HumanEval、MT-Bench和SWE-bench。除AIME2025公开集只有30道题、取全部30题外，其余各取50条；不重复AIME题目凑数。MT-Bench只测第一轮，SWE-bench只发送issue文本，所以这两项及代码题只用于接受率观察，不作为正式任务精度。
 
-先在**能访问公网的本地Mac终端**执行：
+**按负责人最新要求，拉代码、下载数据和跑测试都在68的NPU服务器容器内操作。** `download`直接写入`/home/tyj/glm52-ms1/datasets/glm52-dspark-modelcard-50.json`，`run`读取同一文件，不需要另一台电脑或文件搬运。
 
-~~~bash
-cd /Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync
-git pull
-python3 devtools/glm52_ms1/run_modelcard_50_single.py download
-ssh root@61.47.19.69 'mkdir -p /home/tyj/glm52-ms1/datasets'
-scp ~/Downloads/glm52-dspark-modelcard-50.json root@61.47.19.69:/home/tyj/glm52-ms1/datasets/
-~~~
+本轮修复：完整GSM8K test文件此前被`*.jsonl`忽略规则排除，造成新拉代码后找不到文件；现在将同一份1319题原始数据纳入临时分支，SHA256与既有固定来源一致，并保留旁边的`gsm8k-LICENSE.txt`。这同时补齐七数据集下载入口与300题入口的本地依赖，不改模型服务或测试协议。
 
-下载器从仓库内完整GSM8K test抽样；其余数据集从公开源选择由seed固定的最多100行窗口，再在窗口中无放回抽样。窗口起点、数据行数、实际样本ID和prompt哈希均写入上传的文件，后续eager/graph复用同一文件。
-
-本轮七数据集入口已默认设为`dspark-graph`。如果服务已经按graph启动，直接运行下方客户端命令。若尚未启动，在服务器的`devtools/glm52_ms1/single_dspark_static.sh`开头将`MODE='dspark'`、`GRAPH=1`、`MS1_HOST='61.47.19.69'`填好，再执行`bash devtools/glm52_ms1/single_dspark_static.sh`；保留草稿块长8、验证输入9。测试脚本只连接服务，不会把eager服务切换成graph。
-
-单机graph服务启动后，在61.47.19.69同一容器另开的**客户端终端**执行：
+先在68的**服务容器客户端终端**执行：
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-git pull
+git pull --autostash origin sync/glm52-dspark-ms1
+python3 devtools/glm52_ms1/run_modelcard_50_single.py download
+~~~
+
+`--autostash`用于更新后恢复你已经修改的脚本参数，例如68的IP。下载成功会打印七项样本数和“已生成”文件路径；这一阶段只准备数据，不向模型发请求。
+
+下载器从仓库内完整GSM8K test抽样；其余数据集从公开源选择由seed固定的最多100行窗口，再在窗口中无放回抽样。窗口起点、数据行数、实际样本ID和prompt哈希均写入生成的文件，后续eager/graph复用同一文件。
+
+本轮七数据集入口已默认设为`dspark-graph`；按当前68节点，将`run_modelcard_50_single.py`顶部的`HOST`改为`"61.47.19.68"`。如果服务已经按graph启动，直接运行下方客户端命令。若尚未启动，在服务器的`devtools/glm52_ms1/single_dspark_static.sh`开头将`MODE='dspark'`、`GRAPH=1`、`MS1_HOST='61.47.19.68'`填好，再执行`bash devtools/glm52_ms1/single_dspark_static.sh`；保留草稿块长8、验证输入9。测试脚本只连接服务，不会把eager服务切换成graph。
+
+单机graph服务启动后，在61.47.19.68同一容器另开的**客户端终端**执行：
+
+~~~bash
+cd /home/tyj/glm52/sglang
 python3 devtools/glm52_ms1/run_modelcard_50_single.py run
 ~~~
 
 脚本依次单独调用原生`sglang.benchmark.serving`，每项输出A/P/N、`A/P`接受率、模型卡口径`AL=1+A/N`，并从直方图计算第0～7位接受率。结果在终端打印的Evidence目录，总表为该目录的`summary.json`。默认是`dspark-graph`、61.47.19.69；启动前会核对服务模式，遇到eager服务会报不匹配，各数据集的`summary.json`保留graph指标。若单机实际换了地址，只替换同一文件顶部`HOST = "61.47.19.69"`引号中的IP。
 
-本轮处于graph功能和接受率验证阶段，只修改七数据集入口的默认模式，复用原有请求、计数及graph指标采集；样本、并发1和1024输出上限保持一致，便于与eager比较。客户端检查不等于NPU实测通过，具体见学习手册[23.7 Eager和Graph必须分开建立能力](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)。
+上一轮已将七数据集入口默认切到graph，本轮补齐数据文件并让下载与跑测使用同一服务器目录。Git打包副本中的8项本地测试通过，覆盖原始数据完整性、下载保存位置及300题准备；68上的实际联网下载和模型跑测待负责人执行。继续复用原有请求、计数及graph指标采集，样本、并发1和1024输出上限保持一致，便于与eager比较。客户端检查不等于NPU实测通过，具体见学习手册[23.7 Eager和Graph必须分开建立能力](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)。
 
 模型卡样本结束后，同一客户端运行300题GSM8K：
 

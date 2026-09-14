@@ -1,11 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU-only contracts for the single-node model-card sample runner."""
 
+import hashlib
 import json
 
 import pytest
 
 import run_modelcard_50_single as runner
+
+
+def test_pinned_gsm8k_source_is_shipped():
+    source = (runner.HERE / "gsm8k-test.jsonl").read_bytes()
+    pinned = json.loads((runner.HERE / "gsm8k10.json").read_text())
+    assert hashlib.sha256(source).hexdigest() == pinned["source_sha256"]
+    rows = [json.loads(line) for line in source.splitlines() if line.strip()]
+    assert len(rows) == 1319
+    assert all(row["question"] and row["answer"] for row in rows)
 
 
 def source_rows():
@@ -56,6 +66,17 @@ def test_fixed_without_replacement_samples_and_aime_source_limit():
         [case["messages"] for case in first["datasets"]["gsm8k"]["cases"]]
     )
     assert '"answer"' not in sent
+
+
+def test_download_writes_the_same_server_bundle_used_by_run(monkeypatch, tmp_path):
+    destination = tmp_path / "datasets" / "glm52-dspark-modelcard-50.json"
+    monkeypatch.setattr(runner, "SERVER_BUNDLE", destination)
+    monkeypatch.setattr(runner, "_load_download_sources", lambda: (source_rows(), None))
+    assert runner.download() == 0
+    bundle = json.loads(destination.read_text())
+    assert bundle["status"] == "MODELCARD_SAMPLE_PREPARED"
+    assert set(bundle["datasets"]) == set(runner.DATASET_ORDER)
+    assert sum(data["actual_samples"] for data in bundle["datasets"].values()) == 330
 
 
 def test_short_non_aime_source_is_rejected():
