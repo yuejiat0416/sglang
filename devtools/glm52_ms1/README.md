@@ -1,6 +1,6 @@
 # GLM-5.2：从新机器到单双机启动、双机跑测与DeepEP预案
 
-**2026-09-14当前执行：单机DSpark static graph先跑模型卡七类数据的固定样本接受率，再跑GSM8K 300题精度及接受率。直接按[当前单机测试](#modelcard-50-current)执行。** 之前的双机GPQA/GSP流程继续保留为历史与后续入口，不是这次单机测试的前置步骤。
+**2026-09-14当前执行：单机DSpark static graph依次跑模型卡七类数据的固定样本接受率、EvalScope全量GPQA-Diamond精度，再跑GSM8K 300题精度及接受率。直接按[当前单机测试](#modelcard-50-current)执行。** 之前的双机GPQA/GSP流程继续保留为历史与后续入口，不是这次单机测试的前置步骤。
 
 <a id="modelcard-50-current"></a>
 ## 当前单机测试：模型卡样本与GSM8K 300题
@@ -35,6 +35,23 @@ python3 devtools/glm52_ms1/run_modelcard_50_single.py run
 ~~~
 
 脚本依次单独调用原生`sglang.benchmark.serving`，每项输出A/P/N、`A/P`接受率、模型卡口径`AL=1+A/N`，并从直方图计算第0～7位接受率。结果在终端打印的Evidence目录，总表为该目录的`summary.json`。默认是`dspark-graph`、61.47.19.68；启动前会核对服务模式，遇到eager服务会报不匹配，各数据集的`summary.json`保留graph指标。
+
+### 单机GPQA-Diamond全量精度
+
+这是独立的精度评测，使用EvalScope 1.11.1官方`evalscope eval`入口和ModelScope的`AI-ModelScope/gpqa_diamond`完整198题。它不使用上面的模型卡接受率抽样，也不把答案发给模型。脚本会在68自动准备独立EvalScope环境和数据缓存，不修改正在运行的服务Python。
+
+本轮参数沿用仓库GLM-5.2 GPQA测试的0-shot、temperature 1.0、max_tokens 65536；单机并发设为4。服务启动前，把`single_dspark_static.sh`顶部设为`MODE='dspark'`、`GRAPH=1`、`MS1_HOST='61.47.19.68'`、`CONTEXT_LENGTH=69632`。如果服务上下文不足，客户端脚本会直接说明需要修改哪一行，不会开始198题评测。
+
+服务ready后，在68同一容器另开的客户端终端只执行：
+
+~~~bash
+cd /home/tyj/glm52/sglang
+bash devtools/glm52_ms1/run_gpqa_diamond_single.sh
+~~~
+
+结果保存在`/home/tyj/glm52-ms1/evidence/gpqa-diamond-single/`下面的时间目录，准确率看`reports/`中的GPQA报告。要核对DSpark相对target-only是否下降，先保存本轮结果，再用相同单机脚本把服务切成`MODE='target-only'`、`GRAPH=1`，启动后原样重跑这一条评测命令；两轮使用同一EvalScope版本、数据集、seed和生成参数。该入口只负责精度，DSpark接受率仍以模型卡测试或服务端接受计数单独汇总。
+
+这一环属于整模型任务精度验证，对应学习手册[28.7 评测协议](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4747)：先固定数据、提示、采样与输出预算，再比较DSpark和target-only，不能拿接受率代替正确率。
 
 上一轮已将七数据集入口默认切到graph，本轮补齐数据文件并让下载与跑测使用同一服务器目录。Git打包副本中的8项本地测试通过，覆盖原始数据完整性、下载保存位置及300题准备；68上的实际联网下载和模型跑测待负责人执行。继续复用原有请求、计数及graph指标采集，样本、并发1和1024输出上限保持一致，便于与eager比较。客户端检查不等于NPU实测通过，具体见学习手册[23.7 Eager和Graph必须分开建立能力](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)。
 
