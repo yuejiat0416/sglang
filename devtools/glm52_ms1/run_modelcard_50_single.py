@@ -9,6 +9,7 @@ SGLang service, using the unchanged serving benchmark.
 
 import argparse
 import hashlib
+import http.client
 import json
 import random
 import sys
@@ -36,7 +37,7 @@ from two_node_colocated.client_common import (
 
 # run时只需让 MODE 和 HOST 与当前单机服务一致。
 MODE = "dspark-graph"  # dspark-eager / dspark-graph / target-eager / target-graph
-HOST = "61.47.19.69"
+HOST = "61.47.19.68"
 PORT = 8810
 TARGET_MODEL = "/home/weights/GLM-5.2-w8a8"
 DRAFT_MODEL = "/home/weights/GLM-5.2-DSpark-NPU-0805"
@@ -95,6 +96,27 @@ def _required(row, key, dataset):
     return value.strip()
 
 
+def _download_json(request):
+    transports = (
+        (
+            "direct",
+            urllib.request.build_opener(urllib.request.ProxyHandler({})),
+        ),
+        ("configured proxy", urllib.request.build_opener()),
+    )
+    errors = []
+    for transport, opener in transports:
+        for attempt in range(3):
+            try:
+                with opener.open(request, timeout=60) as response:
+                    return json.load(response)
+            except (OSError, http.client.HTTPException) as exc:
+                errors.append(f"{transport} attempt {attempt + 1}: {exc}")
+                if attempt < 2:
+                    time.sleep(2**attempt)
+    raise RuntimeError("数据下载失败；" + "；".join(errors))
+
+
 def _hf_rows(name, dataset, config, split):
     total = HF_SOURCE_ROWS[name]
     length = min(100, total)
@@ -111,15 +133,7 @@ def _hf_rows(name, dataset, config, split):
     )
     url = "https://datasets-server.huggingface.co/rows?" + query
     request = urllib.request.Request(url, headers={"User-Agent": "glm52-dspark-ms1"})
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                page = json.load(response)
-            break
-        except OSError:
-            if attempt == 2:
-                raise
-            time.sleep(2**attempt)
+    page = _download_json(request)
     batch = page.get("rows")
     if not isinstance(batch, list) or len(batch) != length:
         raise ValueError(f"{dataset}: 数据服务没有返回预期的{length}行")

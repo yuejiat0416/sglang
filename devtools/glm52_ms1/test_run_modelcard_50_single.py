@@ -2,11 +2,42 @@
 """CPU-only contracts for the single-node model-card sample runner."""
 
 import hashlib
+import io
 import json
 
 import pytest
 
 import run_modelcard_50_single as runner
+
+
+class _JsonResponse(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
+
+
+class _Opener:
+    def __init__(self, results):
+        self.results = iter(results)
+
+    def open(self, _request, timeout):
+        assert timeout == 60
+        result = next(self.results)
+        if isinstance(result, Exception):
+            raise result
+        return _JsonResponse(json.dumps(result).encode())
+
+
+def test_download_falls_back_from_direct_to_configured_proxy(monkeypatch):
+    direct = _Opener([OSError("direct-1"), OSError("direct-2"), OSError("direct-3")])
+    proxy = _Opener([{"rows": []}])
+    openers = iter([direct, proxy])
+    monkeypatch.setattr(runner.urllib.request, "build_opener", lambda *_args: next(openers))
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    result = runner._download_json(runner.urllib.request.Request("https://example.test"))
+    assert result == {"rows": []}
 
 
 def test_pinned_gsm8k_source_is_shipped():

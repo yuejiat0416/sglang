@@ -34,7 +34,7 @@ cd /home/tyj/glm52/sglang
 python3 devtools/glm52_ms1/run_modelcard_50_single.py run
 ~~~
 
-脚本依次单独调用原生`sglang.benchmark.serving`，每项输出A/P/N、`A/P`接受率、模型卡口径`AL=1+A/N`，并从直方图计算第0～7位接受率。结果在终端打印的Evidence目录，总表为该目录的`summary.json`。默认是`dspark-graph`、61.47.19.69；启动前会核对服务模式，遇到eager服务会报不匹配，各数据集的`summary.json`保留graph指标。若单机实际换了地址，只替换同一文件顶部`HOST = "61.47.19.69"`引号中的IP。
+脚本依次单独调用原生`sglang.benchmark.serving`，每项输出A/P/N、`A/P`接受率、模型卡口径`AL=1+A/N`，并从直方图计算第0～7位接受率。结果在终端打印的Evidence目录，总表为该目录的`summary.json`。默认是`dspark-graph`、61.47.19.68；启动前会核对服务模式，遇到eager服务会报不匹配，各数据集的`summary.json`保留graph指标。
 
 上一轮已将七数据集入口默认切到graph，本轮补齐数据文件并让下载与跑测使用同一服务器目录。Git打包副本中的8项本地测试通过，覆盖原始数据完整性、下载保存位置及300题准备；68上的实际联网下载和模型跑测待负责人执行。继续复用原有请求、计数及graph指标采集，样本、并发1和1024输出上限保持一致，便于与eager比较。客户端检查不等于NPU实测通过，具体见学习手册[23.7 Eager和Graph必须分开建立能力](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)。
 
