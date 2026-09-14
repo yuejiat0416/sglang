@@ -1,6 +1,6 @@
 # GLM-5.2：从新机器到单双机启动、双机跑测与DeepEP预案
 
-**2026-09-14当前执行：单机先跑模型卡七类数据的固定样本接受率，再跑GSM8K 300题精度及接受率。直接按[当前单机测试](#modelcard-50-current)执行。** 之前的双机GPQA/GSP流程继续保留为历史与后续入口，不是这次单机测试的前置步骤。
+**2026-09-14当前执行：单机DSpark static graph先跑模型卡七类数据的固定样本接受率，再跑GSM8K 300题精度及接受率。直接按[当前单机测试](#modelcard-50-current)执行。** 之前的双机GPQA/GSP流程继续保留为历史与后续入口，不是这次单机测试的前置步骤。
 
 <a id="modelcard-50-current"></a>
 ## 当前单机测试：模型卡样本与GSM8K 300题
@@ -21,7 +21,9 @@ scp ~/Downloads/glm52-dspark-modelcard-50.json root@61.47.19.69:/home/tyj/glm52-
 
 下载器从仓库内完整GSM8K test抽样；其余数据集从公开源选择由seed固定的最多100行窗口，再在窗口中无放回抽样。窗口起点、数据行数、实际样本ID和prompt哈希均写入上传的文件，后续eager/graph复用同一文件。
 
-单机服务启动后，在61.47.19.69同一容器另开的**客户端终端**执行：
+本轮七数据集入口已默认设为`dspark-graph`。如果服务已经按graph启动，直接运行下方客户端命令。若尚未启动，在服务器的`devtools/glm52_ms1/single_dspark_static.sh`开头将`MODE='dspark'`、`GRAPH=1`、`MS1_HOST='61.47.19.69'`填好，再执行`bash devtools/glm52_ms1/single_dspark_static.sh`；保留草稿块长8、验证输入9。测试脚本只连接服务，不会把eager服务切换成graph。
+
+单机graph服务启动后，在61.47.19.69同一容器另开的**客户端终端**执行：
 
 ~~~bash
 cd /home/tyj/glm52/sglang
@@ -29,7 +31,9 @@ git pull
 python3 devtools/glm52_ms1/run_modelcard_50_single.py run
 ~~~
 
-脚本依次单独调用原生`sglang.benchmark.serving`，每项输出A/P/N、`A/P`接受率、模型卡口径`AL=1+A/N`，并从直方图计算第0～7位接受率。结果在终端打印的Evidence目录，总表为该目录的`summary.json`。默认是`dspark-eager`、61.47.19.69；切换graph时只把[脚本顶部MODE](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/devtools/glm52_ms1/run_modelcard_50_single.py)改成`"dspark-graph"`，服务启动参数也必须对应graph。若单机实际换了地址，只替换同一文件顶部`HOST = "61.47.19.69"`引号中的IP。
+脚本依次单独调用原生`sglang.benchmark.serving`，每项输出A/P/N、`A/P`接受率、模型卡口径`AL=1+A/N`，并从直方图计算第0～7位接受率。结果在终端打印的Evidence目录，总表为该目录的`summary.json`。默认是`dspark-graph`、61.47.19.69；启动前会核对服务模式，遇到eager服务会报不匹配，各数据集的`summary.json`保留graph指标。若单机实际换了地址，只替换同一文件顶部`HOST = "61.47.19.69"`引号中的IP。
+
+本轮处于graph功能和接受率验证阶段，只修改七数据集入口的默认模式，复用原有请求、计数及graph指标采集；样本、并发1和1024输出上限保持一致，便于与eager比较。客户端检查不等于NPU实测通过，具体见学习手册[23.7 Eager和Graph必须分开建立能力](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)。
 
 模型卡样本结束后，同一客户端运行300题GSM8K：
 

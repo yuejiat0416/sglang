@@ -34,7 +34,7 @@ from two_node_colocated.client_common import (
 )
 
 # run时只需让 MODE 和 HOST 与当前单机服务一致。
-MODE = "dspark-eager"  # dspark-eager / dspark-graph / target-eager / target-graph
+MODE = "dspark-graph"  # dspark-eager / dspark-graph / target-eager / target-graph
 HOST = "61.47.19.69"
 PORT = 8810
 TARGET_MODEL = "/home/weights/GLM-5.2-w8a8"
