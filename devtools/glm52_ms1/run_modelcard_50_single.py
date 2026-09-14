@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Download and run fixed samples from the DSpark model-card benchmarks.
+"""Install and run fixed samples from the DSpark model-card benchmarks.
 
 Run both ``download`` and ``run`` in the NPU server container. The download
-writes the dataset file that ``run`` reads beside an existing single-node
-SGLang service, using the unchanged serving benchmark.
+command validates and installs the samples shipped with this temporary branch;
+``run`` reads that local copy beside an existing single-node SGLang service.
 """
 
 import argparse
 import hashlib
-import http.client
 import json
 import random
 import sys
-import time
-import urllib.parse
-import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +45,10 @@ CONCURRENCY = 1
 SEED = 42
 
 HERE = Path(__file__).resolve().parent
+BUNDLED_BUNDLE = HERE / "modelcard-50-samples.json"
+BUNDLED_BUNDLE_SHA256 = (
+    "495d8463cc3ce986d3bff56a1816c1f1ed31a6a2c9b02b438fdf2f62554e5d61"
+)
 DATASET_ORDER = (
     "gsm8k",
     "math500",
@@ -66,13 +66,14 @@ HF_SOURCES = {
     "mt_bench": ("HuggingFaceH4/mt_bench_prompts", "default", "train"),
     "swe_bench": ("princeton-nlp/SWE-bench", "default", "test"),
 }
-HF_SOURCE_ROWS = {
-    "math500": 500,
+EXPECTED_SAMPLE_COUNTS = {
+    "gsm8k": 50,
+    "math500": 50,
     "aime2025": 30,
-    "mbpp": 500,
-    "humaneval": 164,
-    "mt_bench": 80,
-    "swe_bench": 2294,
+    "mbpp": 50,
+    "humaneval": 50,
+    "mt_bench": 50,
+    "swe_bench": 50,
 }
 MODEL_CARD = {
     "gsm8k": ([92.36, 84.33, 76.80, 69.59, 63.00, 57.05, 51.58, 46.29], 6.41),
@@ -94,79 +95,6 @@ def _required(row, key, dataset):
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{dataset}: 缺少文本字段 {key}")
     return value.strip()
-
-
-def _download_json(request):
-    transports = (
-        (
-            "direct",
-            urllib.request.build_opener(urllib.request.ProxyHandler({})),
-        ),
-        ("configured proxy", urllib.request.build_opener()),
-    )
-    errors = []
-    for transport, opener in transports:
-        for attempt in range(3):
-            try:
-                with opener.open(request, timeout=60) as response:
-                    return json.load(response)
-            except (OSError, http.client.HTTPException) as exc:
-                errors.append(f"{transport} attempt {attempt + 1}: {exc}")
-                if attempt < 2:
-                    time.sleep(2**attempt)
-    raise RuntimeError("数据下载失败；" + "；".join(errors))
-
-
-def _hf_rows(name, dataset, config, split):
-    total = HF_SOURCE_ROWS[name]
-    length = min(100, total)
-    rng = random.Random(f"{SEED}:{name}")
-    offset = rng.randrange(total - length + 1)
-    query = urllib.parse.urlencode(
-        {
-            "dataset": dataset,
-            "config": config,
-            "split": split,
-            "offset": offset,
-            "length": length,
-        }
-    )
-    url = "https://datasets-server.huggingface.co/rows?" + query
-    request = urllib.request.Request(url, headers={"User-Agent": "glm52-dspark-ms1"})
-    page = _download_json(request)
-    batch = page.get("rows")
-    if not isinstance(batch, list) or len(batch) != length:
-        raise ValueError(f"{dataset}: 数据服务没有返回预期的{length}行")
-    if page.get("num_rows_total") != total:
-        raise ValueError(
-            f"{dataset}: 公开split行数从{total}变为{page.get('num_rows_total')}，"
-            "请审视数据revision后再运行"
-        )
-    return [item["row"] for item in batch], {
-        "source_rows": total,
-        "download_window_offset": offset,
-        "download_window_length": length,
-    }
-
-
-def _load_download_sources():
-    gsm = [
-        json.loads(line)
-        for line in (HERE / "gsm8k-test.jsonl").read_text().splitlines()
-        if line.strip()
-    ]
-    result = {"gsm8k": gsm}
-    windows = {
-        "gsm8k": {
-            "source_rows": len(gsm),
-            "download_window_offset": 0,
-            "download_window_length": len(gsm),
-        }
-    }
-    for name in DATASET_ORDER[1:]:
-        print(f"下载 {name} ...", flush=True)
-        result[name], windows[name] = _hf_rows(name, *HF_SOURCES[name])
-    return result, windows
 
 
 def _prompt(dataset, row):
@@ -297,12 +225,47 @@ def build_bundle(source_rows, source_windows=None):
     }
 
 
+def _validate_bundle(bundle):
+    if bundle.get("schema_version") != 1:
+        raise ValueError("固定样本schema_version不正确")
+    if bundle.get("status") != "MODELCARD_SAMPLE_PREPARED":
+        raise ValueError("固定样本status不正确")
+    if bundle.get("seed") != SEED:
+        raise ValueError("固定样本seed不正确")
+    datasets = bundle.get("datasets")
+    if not isinstance(datasets, dict) or set(datasets) != set(DATASET_ORDER):
+        raise ValueError("固定样本的数据集列表不正确")
+    for name, expected in EXPECTED_SAMPLE_COUNTS.items():
+        data = datasets[name]
+        cases = data.get("cases")
+        if data.get("actual_samples") != expected or not isinstance(cases, list):
+            raise ValueError(f"{name}: 固定样本数量不正确")
+        if len(cases) != expected:
+            raise ValueError(f"{name}: 固定样本内容不完整")
+        ids = set()
+        for case in cases:
+            messages = case.get("messages")
+            if (
+                not isinstance(case.get("id"), str)
+                or case["id"] in ids
+                or not isinstance(messages, list)
+                or len(messages) != 1
+                or messages[0].get("role") != "user"
+                or not isinstance(messages[0].get("content"), str)
+                or case.get("prompt_sha256") != _digest(messages[0]["content"])
+            ):
+                raise ValueError(f"{name}: 固定样本内容或哈希不正确")
+            ids.add(case["id"])
+
+
 def download():
-    rows, windows = _load_download_sources()
-    bundle = build_bundle(rows, windows)
+    if sha(BUNDLED_BUNDLE) != BUNDLED_BUNDLE_SHA256:
+        raise ValueError("仓库内固定样本文件哈希不正确，请重新git pull")
+    bundle = json.loads(BUNDLED_BUNDLE.read_text())
+    _validate_bundle(bundle)
     SERVER_BUNDLE.parent.mkdir(parents=True, exist_ok=True)
     write_json(SERVER_BUNDLE, bundle)
-    print(f"已生成：{SERVER_BUNDLE}")
+    print(f"固定样本已准备：{SERVER_BUNDLE}")
     for name in DATASET_ORDER:
         print(f"{name}: {bundle['datasets'][name]['actual_samples']}条")
     return 0
@@ -510,8 +473,7 @@ def run():
     if MODE not in {"dspark-eager", "dspark-graph", "target-eager", "target-graph"}:
         raise ValueError(f"不支持的MODE：{MODE}")
     bundle = json.loads(SERVER_BUNDLE.read_text())
-    if bundle.get("status") != "MODELCARD_SAMPLE_PREPARED":
-        raise ValueError("样本文件格式不正确，请在本机重新执行download")
+    _validate_bundle(bundle)
     run_id = (
         datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         + "-"

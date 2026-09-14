@@ -9,7 +9,7 @@
 
 模型卡列出GSM8K、MATH500、AIME2025、MBPP、HumanEval、MT-Bench和SWE-bench。除AIME2025公开集只有30道题、取全部30题外，其余各取50条；不重复AIME题目凑数。MT-Bench只测第一轮，SWE-bench只发送issue文本，所以这两项及代码题只用于接受率观察，不作为正式任务精度。
 
-**按负责人最新要求，拉代码、下载数据和跑测试都在68的NPU服务器容器内操作。** `download`直接写入`/home/tyj/glm52-ms1/datasets/glm52-dspark-modelcard-50.json`，`run`读取同一文件，不需要另一台电脑或文件搬运。
+**按负责人最新要求，拉代码、准备数据和跑测试都在68的NPU服务器容器内操作。** 68实测无法解析Hugging Face域名，已有代理又在TLS/HTTP阶段断开，所以固定样本现已直接随临时测试分支提供。`git pull`取得样本，`download`只校验并安装到`/home/tyj/glm52-ms1/datasets/glm52-dspark-modelcard-50.json`；它不再访问外网，`run`读取同一文件，不需要另一台电脑或文件搬运。
 
 本轮修复：完整GSM8K test文件此前被`*.jsonl`忽略规则排除，造成新拉代码后找不到文件；现在将同一份1319题原始数据纳入临时分支，SHA256与既有固定来源一致，并保留旁边的`gsm8k-LICENSE.txt`。这同时补齐七数据集下载入口与300题入口的本地依赖，不改模型服务或测试协议。
 
@@ -21,9 +21,9 @@ git pull --autostash origin sync/glm52-dspark-ms1
 python3 devtools/glm52_ms1/run_modelcard_50_single.py download
 ~~~
 
-`--autostash`用于更新后恢复你已经修改的脚本参数，例如68的IP。下载成功会打印七项样本数和“已生成”文件路径；这一阶段只准备数据，不向模型发请求。
+`--autostash`用于更新后恢复你已经修改的脚本参数，例如68的IP。成功会打印七项样本数和“固定样本已准备”文件路径；这一阶段只准备数据，不向模型发请求。
 
-下载器从仓库内完整GSM8K test抽样；其余数据集从公开源选择由seed固定的最多100行窗口，再在窗口中无放回抽样。窗口起点、数据行数、实际样本ID和prompt哈希均写入生成的文件，后续eager/graph复用同一文件。
+固定样本此前从仓库内完整GSM8K test及其余公开数据集生成：每项选择由seed固定的最多100行窗口，再在窗口中无放回抽样。窗口起点、数据行数、实际样本ID和prompt哈希均保留在样本文件中，后续eager/graph复用同一文件。
 
 本轮七数据集入口已默认设为`dspark-graph`；按当前68节点，将`run_modelcard_50_single.py`顶部的`HOST`改为`"61.47.19.68"`。如果服务已经按graph启动，直接运行下方客户端命令。若尚未启动，在服务器的`devtools/glm52_ms1/single_dspark_static.sh`开头将`MODE='dspark'`、`GRAPH=1`、`MS1_HOST='61.47.19.68'`填好，再执行`bash devtools/glm52_ms1/single_dspark_static.sh`；保留草稿块长8、验证输入9。测试脚本只连接服务，不会把eager服务切换成graph。
 

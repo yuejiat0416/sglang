@@ -2,42 +2,11 @@
 """CPU-only contracts for the single-node model-card sample runner."""
 
 import hashlib
-import io
 import json
 
 import pytest
 
 import run_modelcard_50_single as runner
-
-
-class _JsonResponse(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        self.close()
-
-
-class _Opener:
-    def __init__(self, results):
-        self.results = iter(results)
-
-    def open(self, _request, timeout):
-        assert timeout == 60
-        result = next(self.results)
-        if isinstance(result, Exception):
-            raise result
-        return _JsonResponse(json.dumps(result).encode())
-
-
-def test_download_falls_back_from_direct_to_configured_proxy(monkeypatch):
-    direct = _Opener([OSError("direct-1"), OSError("direct-2"), OSError("direct-3")])
-    proxy = _Opener([{"rows": []}])
-    openers = iter([direct, proxy])
-    monkeypatch.setattr(runner.urllib.request, "build_opener", lambda *_args: next(openers))
-    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
-    result = runner._download_json(runner.urllib.request.Request("https://example.test"))
-    assert result == {"rows": []}
 
 
 def test_pinned_gsm8k_source_is_shipped():
@@ -102,12 +71,23 @@ def test_fixed_without_replacement_samples_and_aime_source_limit():
 def test_download_writes_the_same_server_bundle_used_by_run(monkeypatch, tmp_path):
     destination = tmp_path / "datasets" / "glm52-dspark-modelcard-50.json"
     monkeypatch.setattr(runner, "SERVER_BUNDLE", destination)
-    monkeypatch.setattr(runner, "_load_download_sources", lambda: (source_rows(), None))
     assert runner.download() == 0
     bundle = json.loads(destination.read_text())
     assert bundle["status"] == "MODELCARD_SAMPLE_PREPARED"
     assert set(bundle["datasets"]) == set(runner.DATASET_ORDER)
     assert sum(data["actual_samples"] for data in bundle["datasets"].values()) == 330
+
+
+def test_bundled_samples_are_fixed_and_contain_no_answers():
+    source = runner.BUNDLED_BUNDLE.read_bytes()
+    assert hashlib.sha256(source).hexdigest() == runner.BUNDLED_BUNDLE_SHA256
+    bundle = json.loads(source)
+    runner._validate_bundle(bundle)
+    assert {
+        name: len(data["cases"]) for name, data in bundle["datasets"].items()
+    } == runner.EXPECTED_SAMPLE_COUNTS
+    for data in bundle["datasets"].values():
+        assert all("answer" not in case for case in data["cases"])
 
 
 def test_short_non_aime_source_is_rejected():
