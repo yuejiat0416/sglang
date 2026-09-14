@@ -11,6 +11,7 @@ CACHE='/home/tyj/glm52-ms1/cache'
 DATASET='/home/tyj/glm52-ms1/datasets/gpqa_diamond.csv'
 DATASET_ZIP='/home/tyj/glm52-ms1/datasets/gpqa-dataset.zip'
 DATASET_URL='https://raw.githubusercontent.com/idavidrein/gpqa/main/dataset.zip'
+DATASET_SHA256='41d1213cd7a4998605a26c2798500652572007161b3a92817ba46b35befcd305'
 MAX_TOKENS=65536
 CONCURRENCY=4
 
@@ -29,7 +30,7 @@ if [ ! -f "$DATASET" ]; then
     echo "内网HTTPS证书校验失败；仅对这个固定的官方数据地址使用curl -k重试。"
     curl -k -fL --retry 3 "$DATASET_URL" -o "$DATASET_ZIP"
   fi
-  DATASET_ZIP="$DATASET_ZIP" DATASET="$DATASET" "$VENV/bin/python" - <<'PY'
+  DATASET_ZIP="$DATASET_ZIP" DATASET="$DATASET" DATASET_SHA256="$DATASET_SHA256" "$VENV/bin/python" - <<'PY'
 import csv
 import hashlib
 import os
@@ -51,20 +52,21 @@ with zipfile.ZipFile(archive_path) as archive:
         raise SystemExit("官方压缩包中没有唯一的gpqa_diamond.csv")
     content = archive.read(names[0], pwd=b"deserted-untie-orchid")
 dataset_path.write_bytes(content)
+digest = hashlib.sha256(content).hexdigest()
 with dataset_path.open(encoding="utf-8-sig", newline="") as handle:
     rows = list(csv.DictReader(handle))
     fields = set(rows[0]) if rows else set()
-if len(rows) != 198 or not required.issubset(fields):
+if digest != os.environ["DATASET_SHA256"] or len(rows) != 198 or not required.issubset(fields):
     dataset_path.unlink(missing_ok=True)
-    raise SystemExit(f"GPQA-Diamond数据校验失败：rows={len(rows)}, fields={sorted(fields)}")
-print(f"GPQA-Diamond已准备：198题，SHA256={hashlib.sha256(content).hexdigest()}")
+    raise SystemExit(f"GPQA-Diamond数据校验失败：SHA256={digest}, rows={len(rows)}, fields={sorted(fields)}")
+print(f"GPQA-Diamond已准备：198题，SHA256={digest}")
 PY
 fi
 
 LOCAL_DATASET="$CACHE/gpqa-diamond-local"
 mkdir -p "$LOCAL_DATASET"
 cp "$DATASET" "$LOCAL_DATASET/train.csv"
-DATASET="$DATASET" "$VENV/bin/python" - <<'PY'
+DATASET="$DATASET" DATASET_SHA256="$DATASET_SHA256" "$VENV/bin/python" - <<'PY'
 import csv
 import hashlib
 import os
@@ -81,9 +83,10 @@ required = {
 with path.open(encoding="utf-8-sig", newline="") as handle:
     rows = list(csv.DictReader(handle))
     fields = set(rows[0]) if rows else set()
-if len(rows) != 198 or not required.issubset(fields):
-    raise SystemExit(f"本地GPQA-Diamond无效：rows={len(rows)}, fields={sorted(fields)}")
-print(f"使用本地GPQA-Diamond：198题，SHA256={hashlib.sha256(path.read_bytes()).hexdigest()}")
+digest = hashlib.sha256(path.read_bytes()).hexdigest()
+if digest != os.environ["DATASET_SHA256"] or len(rows) != 198 or not required.issubset(fields):
+    raise SystemExit(f"本地GPQA-Diamond无效：SHA256={digest}, rows={len(rows)}, fields={sorted(fields)}")
+print(f"使用本地GPQA-Diamond：198题，SHA256={digest}")
 PY
 
 CONTEXT_LENGTH=$(curl -fsS 'http://61.47.19.68:8810/get_server_info' | "$VENV/bin/python" -c 'import json,sys; print(json.load(sys.stdin)["context_length"])')

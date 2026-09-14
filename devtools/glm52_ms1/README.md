@@ -38,7 +38,7 @@ python3 devtools/glm52_ms1/run_modelcard_50_single.py run
 
 ### 单机GPQA-Diamond全量精度
 
-这是独立的精度评测，使用EvalScope 1.11.1官方`evalscope eval`入口和GPQA作者仓库的完整198题。它不使用上面的模型卡接受率抽样，也不把答案发给模型。脚本会在68自动准备独立EvalScope环境和本地CSV；评测阶段通过`dataset_args.local_path`离线读取，不再访问ModelScope，也不修改正在运行的服务Python。若内网代理替换HTTPS证书，脚本只对固定的作者数据地址用`curl -k`重试，并在解压后校验198题和必需字段、打印CSV SHA256。
+这是独立的精度评测，使用EvalScope 1.11.1官方`evalscope eval`入口和GPQA作者仓库的完整198题。它不使用上面的模型卡接受率抽样，也不把答案发给模型。脚本会在68自动准备独立EvalScope环境和本地CSV；评测阶段通过`dataset_args.local_path`离线读取，不再访问ModelScope，也不修改正在运行的服务Python。若内网代理替换HTTPS证书，脚本只对固定的作者数据地址用`curl -k`重试；解压后必须同时满足198题、必需字段和脚本固定的官方CSV SHA256，否则不会开始评测。
 
 本轮参数沿用仓库GLM-5.2 GPQA测试的0-shot、temperature 1.0、max_tokens 65536；单机并发设为4。服务启动前，把`single_dspark_static.sh`顶部设为`MODE='dspark'`、`GRAPH=1`、`MS1_HOST='61.47.19.68'`、`CONTEXT_LENGTH=69632`。如果服务上下文不足，客户端脚本会直接说明需要修改哪一行，不会开始198题评测。
 
