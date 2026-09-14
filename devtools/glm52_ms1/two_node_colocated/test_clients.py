@@ -71,6 +71,17 @@ def test_two_node_modes_and_non_applicable_algorithms(cfg, mode):
         common.validate_server(data, cfg, mode)
 
 
+def test_single_node_caller_can_reuse_validation_without_weakening_two_node_default(
+    cfg,
+):
+    data = server(cfg, "dspark-eager")
+    single = dict(cfg, nnodes=1, tp_size=16, dp_size=1)
+    data.update(nnodes=1, tp_size=16, dp_size=1, enable_dp_attention=False)
+    common.validate_server(data, single, "dspark-eager")
+    with pytest.raises(ValueError, match="nnodes"):
+        common.validate_server(data, cfg, "dspark-eager")
+
+
 @pytest.mark.parametrize("mode", ("dspark-eager", "dspark-graph"))
 @pytest.mark.parametrize("block,draft_tokens", ((8, 9), (5, 6)))
 def test_dspark_supported_windows_preserve_reported_values(

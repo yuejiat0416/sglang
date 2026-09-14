@@ -81,7 +81,7 @@ def validate_server(info, cfg, mode):
         raise ValueError(f"Unknown mode: {mode}")
     for key, value in (
         ("device", "npu"),
-        ("nnodes", 2),
+        ("nnodes", cfg.get("nnodes", 2)),
         ("tp_size", cfg["tp_size"]),
         ("dp_size", cfg["dp_size"]),
         ("model_path", cfg["target_model"]),
@@ -147,7 +147,7 @@ def prepare_run(cfg, stage, mode):
     run = (
         Path(cfg["state"])
         / "evidence"
-        / "two-node-colocated"
+        / cfg.get("evidence_scope", "two-node-colocated")
         / f"{stage}-{mode}-{run_id}"
     )
     run.mkdir(parents=True, exist_ok=False)

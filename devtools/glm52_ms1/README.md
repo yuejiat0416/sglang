@@ -1,6 +1,44 @@
 # GLM-5.2：从新机器到单双机启动、双机跑测与DeepEP预案
 
-**2026-09-13当前执行：A3 68/70双机、TP32/DP4、DSpark static graph，gamma4、verify5，使用EvalScope 1.11.1跑GPQA-Diamond全部198题并采集接受计数及图证据。完整顺序见[9.6](#gpqa-full-current)。** 复用已准备的全量脚本，不运行GSM8K或GSP。以下68/69、十题/20题与GPQA暂停描述均为历史阶段；精度91.2%±1个百分点与接受率严格>0.5沿用此前自测参考，并非本轮实测结论。
+**2026-09-14当前执行：单机先跑模型卡七类数据的固定样本接受率，再跑GSM8K 300题精度及接受率。直接按[当前单机测试](#modelcard-50-current)执行。** 之前的双机GPQA/GSP流程继续保留为历史与后续入口，不是这次单机测试的前置步骤。
+
+<a id="modelcard-50-current"></a>
+## 当前单机测试：模型卡样本与GSM8K 300题
+
+目的：先看当前DSpark在[Eco-Tech模型卡](https://modelscope.cn/models/Eco-Tech/GLM-5.2-DSpark-NPU-0805)所列文本分布上的接受情况，再用300条GSM8K同时核对精度。模型卡没有公开数据revision、prompt和生成参数，因此第一项是记录完整输入协议的近似复现，不把数值差异直接判为实现错误。
+
+模型卡列出GSM8K、MATH500、AIME2025、MBPP、HumanEval、MT-Bench和SWE-bench。除AIME2025公开集只有30道题、取全部30题外，其余各取50条；不重复AIME题目凑数。MT-Bench只测第一轮，SWE-bench只发送issue文本，所以这两项及代码题只用于接受率观察，不作为正式任务精度。
+
+先在**能访问公网的本地Mac终端**执行：
+
+~~~bash
+cd /Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync
+git pull
+python3 devtools/glm52_ms1/run_modelcard_50_single.py download
+ssh root@61.47.19.69 'mkdir -p /home/tyj/glm52-ms1/datasets'
+scp ~/Downloads/glm52-dspark-modelcard-50.json root@61.47.19.69:/home/tyj/glm52-ms1/datasets/
+~~~
+
+下载器从仓库内完整GSM8K test抽样；其余数据集从公开源选择由seed固定的最多100行窗口，再在窗口中无放回抽样。窗口起点、数据行数、实际样本ID和prompt哈希均写入上传的文件，后续eager/graph复用同一文件。
+
+单机服务启动后，在61.47.19.69同一容器另开的**客户端终端**执行：
+
+~~~bash
+cd /home/tyj/glm52/sglang
+git pull
+python3 devtools/glm52_ms1/run_modelcard_50_single.py run
+~~~
+
+脚本依次单独调用原生`sglang.benchmark.serving`，每项输出A/P/N、`A/P`接受率、模型卡口径`AL=1+A/N`，并从直方图计算第0～7位接受率。结果在终端打印的Evidence目录，总表为该目录的`summary.json`。默认是`dspark-eager`、61.47.19.69；切换graph时只把[脚本顶部MODE](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/devtools/glm52_ms1/run_modelcard_50_single.py)改成`"dspark-graph"`，服务启动参数也必须对应graph。若单机实际换了地址，只替换同一文件顶部`HOST = "61.47.19.69"`引号中的IP。
+
+模型卡样本结束后，同一客户端运行300题GSM8K：
+
+~~~bash
+cd /home/tyj/glm52/sglang
+python3 devtools/glm52_ms1/run_gsm8k_300_single.py
+~~~
+
+该脚本直接读取仓库自带的官方GSM8K test，固定取前300题，不需要下载数据或安装EvalScope；并发1、temperature 0、最多4096输出token，尊重EOS。终端同时打印`correct/300`和接受率，完整逐题结果在Evidence目录。比较graph或target-only前，只修改[脚本顶部MODE](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/devtools/glm52_ms1/run_gsm8k_300_single.py)，并确保服务模式一致；所有模式保持同300题和相同预算。
 
 此前精度安排：GSM8K取20题、GPQA-Diamond取20题，分别运行和评分，操作保留在[9.5](#accuracy-twenty)。各模式使用同样的20题和输出预算。该流程不是本轮全量EvalScope入口。
 
