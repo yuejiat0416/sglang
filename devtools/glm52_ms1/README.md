@@ -60,7 +60,27 @@ DSpark固定使用static、QuaRot original、草稿gamma=8、Target Verify窗口
 
 这次处于**配置/加载与部署协议**阶段：它固定后续比较所用的服务入口，不代表NPU graph、128k/1k、精度或性能已经通过。CPU侧23项参数展开、kernel注册和语法测试已通过；实际NPU验证仍按“先eager启动和短请求，再graph，再128k/1k容量/压力，最后精度与性能正式采集”的顺序执行。概念上对应学习手册[23.5 外部kernel包是另一条调用路径](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4178)、[23.7 Eager和Graph必须分开建立能力](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)、[24.4 Dense draft在DP Attention下如何分组](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4268)和[28.7 评测协议如何与参考值对齐](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4747)。
 
-**2026-09-14当前执行：单机DSpark static graph依次跑模型卡七类数据的固定样本接受率、EvalScope全量GPQA-Diamond精度，再跑GSM8K 300题精度及接受率。直接按[当前单机测试](#modelcard-50-current)执行。** 之前的双机GPQA/GSP流程继续保留为历史与后续入口，不是这次单机测试的前置步骤。
+**2026-09-16当前执行：单机服务上用同一条命令依次跑EvalScope GSM8K 50题和GPQA-Diamond 10题，并从同一批OpenAI响应精确汇总DSpark A/P/N。直接按下一节执行。** 之前的全量GPQA、GSM8K 300题和双机流程继续保留为后续入口，不是本次抽样的前置步骤。
+
+## 当前精度抽样：GSM8K 50题、GPQA-Diamond 10题
+
+这是整模型精度验证环节。评测数据加载、提示模板、规则评分和报告均使用EvalScope 1.11.1；仓库内的Python入口只利用EvalScope官方`OpenAICompatibleAPI.on_response`回调，把SGLang响应中的`accepted/proposed/verify`计数同步保存。普通`evalscope eval`命令会完成精度报告，但不会替本项目聚合同批请求的A/P/N，因此这里保留一层最小记录逻辑，不解析滚动服务日志。
+
+本轮固定取官方GSM8K main/test前50题、GPQA-Diamond前10题，均为0-shot、seed 42、不打乱。GSM8K使用temperature 0、最多4096输出token、并发4；GPQA使用temperature 0、最多65536输出token、并发1。GPQA并发1是为了让单条长推理独占当前69632 KV容量，避免先前并发请求触发KV cache retraction后把调度压力混进精度结果。10/50题只作快速对照，不设绝对精度PASS线；判断DSpark精度是否下降，需要随后用target-only服务原样重跑同一命令。
+
+先按[单机正式启动](#step5)启动服务。要测DSpark graph，就只把`single_dspark_static.sh`顶部设为`MODE='dspark'`、`GRAPH=1`；服务ready后在68同一容器另开的客户端终端执行：
+
+~~~bash
+cd /home/tyj/glm52/sglang
+git pull --autostash origin sync/glm52-dspark-ms1
+bash devtools/glm52_ms1/run_accuracy_samples_single.sh
+~~~
+
+脚本使用仓库自带的1319题GSM8K test，以及已经存在的`/home/tyj/glm52-ms1/datasets/gpqa_diamond.csv`。若EvalScope环境不存在，脚本会在`/home/tyj/glm52-ms1/evalscope-venv`创建并从阿里PyPI镜像安装固定的1.11.1版本；数据集始终离线读取，不访问ModelScope。两套题顺序执行、分别评分和统计，结果根目录会打印为`Evidence:`；总表是其中的`summary.json`，每个数据集还有`evalscope-report.json`、`summary.json`和逐请求`acceptance.jsonl`。
+
+DSpark结果中的`accept_rate`严格按`sum(A)/sum(P)`计算，同时保留A/P/N和`1+sum(A)/sum(N)`。它是这批精度请求的接受率，不是多并发压测准出。随后切为`MODE='target-only'`、保持GRAPH和其余服务参数不变，重启后再次执行同一条命令；target-only报告会把接受率明确记为不适用。两次EvalScope报告才能用于观察精度是否下降。
+
+这一步对应学习手册[28.7 评测协议如何与参考值对齐](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4747)：数据、样本顺序、提示、采样和输出预算固定后，再比较DSpark与target-only；接受率和精度分别解读。
 
 <a id="modelcard-50-current"></a>
 ## 当前单机测试：模型卡样本与GSM8K 300题
@@ -490,6 +510,7 @@ git pull
 |---|---|
 | single_dspark_static.sh | 当前单机完整启动脚本 |
 | two_node_dspark_static.sh | 当前双机混部完整启动脚本 |
+| run_accuracy_samples_single.sh / .py | 当前单机EvalScope精度抽样入口：GSM8K 50题、GPQA-Diamond 10题及同批A/P/N |
 | two_node_colocated/run_tests.py | 本轮双机测试唯一日常入口：准备数据、精度、缓存检查、压力与对比表 |
 | run_gsm8k_single.sh | 单机服务启动后的GSM8K十题入口；只需让顶部MODE与服务一致，然后直接运行 |
 | register_glm52_dspark_kernel.py | 两个正式启动脚本内部使用的192维Python算子注册工具，无需单独操作 |
