@@ -1,5 +1,62 @@
 # GLM-5.2：从新机器到单双机启动、双机跑测与DeepEP预案
 
+## 正式部署入口（2026-09-16）
+
+后续精度、性能和测试交付统一使用下面两个脚本；它们取代本文后面保留的历史启动配方：
+
+- [single_dspark_static.sh](single_dspark_static.sh)：单机TP16，用于GSM8K、GPQA、eager/graph功能与精度对照。
+- [two_node_dspark_static.sh](two_node_dspark_static.sh)：双机TP32/DP4，用于131072输入、1024输出、并发1～4及prefix cache性能测试。
+
+两个脚本直接基于[SGLang官方GLM-5.2 A3部署命令](https://docs.sglang.io/docs/hardware-platforms/ascend-npus/model-deployment/tutorials/glm_5_2)维护CPU、CANN、通信、DeepEP、chunked prefill和graph基线。启动前只在脚本顶部改普通赋值：`MODE`、`GRAPH`；双机再让两台的`NODE_RANK`分别为0和1。没有JSON、local.env、额外启动器或手工export步骤。
+
+当前正式默认值如下：
+
+| 场景 | 拓扑 | context / KV token上限 | 并发上限 | graph捕获批次 |
+|---|---|---:|---:|---:|
+| 单机精度/功能 | TP16 | 69632 / 69632 | 4 | 16 |
+| 双机128k/1k | TP32/DP4 | 133120 / 133120 | 4 | 8 |
+
+DSpark固定使用static、QuaRot original、草稿gamma=8、Target Verify窗口9。NEXTN使用官方示例的steps=3、topk=1、draft tokens=4。`target-only`不带任何投机参数。eager增加`--disable-cuda-graph`；graph使用当前参数名`--cuda-graph-bs-decode`。
+
+两个启动脚本会调用[register_glm52_dspark_kernel.py](register_glm52_dspark_kernel.py)，把kernel分支中已审定的192维Python算子复制到当前测试容器已安装的`sgl_kernel_npu`包，并打印kernel commit、源/目标路径和SHA256。这样直接组合“当前SGLang源码 + 192维Python算子 + 镜像内其余二进制依赖”，不再创建临时overlay目录。测试容器需要对其site-packages有写权限；用新容器时脚本会再次注册。
+
+### 相对旧脚本的删减
+
+| 删减项 | 作用与原因 |
+|---|---|
+| `GLM52_LEGACY_LAUNCH`及环境变量覆盖层 | 旧测试工具可从外部改写部署参数，导致文件内容和实际启动不一致；正式脚本以顶部配置为唯一来源。 |
+| `with_kernel_checkout.py` overlay启动包装 | 旧路径创建临时目录、重写PYTHONPATH并保存manifest；正式路径改为一次明确的kernel注册，服务仍由`python3 -m sglang.launch_server`直接启动。 |
+| `MS1_STATE`、overlay证据目录 | 它们只服务旧包装器，不参与模型推理；正式启动不再要求这个配置。 |
+| 自动探测双机路由网卡 | 容器内`ip`结果曾引起误判；正式脚本直接填写两台已确认的`enp196s0f0`并检查`/sys/class/net`。换机器时只改顶部两行网卡名。 |
+| `SGLANG_ENABLE_SPEC_V2=1` | 当前源码已移除此开关，继续设置只会产生弃用告警。 |
+| scheduler延迟、实验radix tree、强制离线等调试环境变量 | 不是官方GLM-5.2部署基线，也不是DSpark static所必需；删除后减少性能和数据准备被隐藏改写的风险。 |
+| 旧参数`--cuda-graph-bs` | 当前源码将其作为弃用别名；正式脚本使用`--cuda-graph-bs-decode`。 |
+
+### 相对旧脚本的新增
+
+| 新增项 | 做什么 |
+|---|---|
+| `register_glm52_dspark_kernel.py` | 启动前验证kernel源码确实包含head_dim=192路径，复制到镜像安装包，清理该模块旧pyc并用SHA256回读核验。 |
+| `--max-total-tokens`明确值 | 不再留空让runtime静默缩小KV容量；单机和双机的服务配置可被测试脚本准确预检。 |
+| 官方chunked prefill配置 | 单机/双机都使用16384分块，避免131072输入一次性prefill造成不必要的峰值内存。 |
+| `--enable-metrics`与`--enable-cache-report` | 为性能结果、prefix cache命中和DSpark接受计数留出统一服务观测入口。 |
+| `--print-command` | 只展开最终服务参数，不加载CANN、不注册kernel、不访问NPU，供测试人员审查部署差异。 |
+
+### 相对旧脚本的修改
+
+| 修改项 | 新值与用途 |
+|---|---|
+| 双机拓扑 | 从临时TP32/DP8改为TP32/DP4、最大并发4。已有实机证据表明这一拓扑能分配133120 KV tokens；每个并发可落到一个DP lane。 |
+| 长上下文 | 双机固定`CONTEXT_LENGTH=MAX_TOTAL_TOKENS=133120`，覆盖131072输入和1024输出并保留调度余量。单机固定69632，覆盖GPQA的65536输出预算。 |
+| `mem-fraction-static` | 单机0.70沿用官方值；双机从官方0.80降到0.73。后者来自现有DSpark实机：为graph保留更多非静态HBM，同时DP4仍取得133120 KV tokens。每次仍以启动日志和`server_info`回读为准。 |
+| DSpark窗口 | 删除临时gamma=4/verify=5实验，恢复checkpoint block_size=8对应的gamma=8/verify=9，作为正式精度和接受率协议。 |
+| NEXTN参数 | 从旧同事配方4/1/5改为当前官方GLM-5.2示例3/1/4，作为独立对照组。 |
+| graph批次 | 单机16；双机DP4下显式8。它们满足当前拓扑的捕图对齐，并避免双机沿用过大的32批次增加HBM压力。 |
+| 双机radix cache | 官方双机示例关闭radix cache；本项目要测0%/50%/90% prefix cache，因此保留开启状态。 |
+| 服务地址 | 单机和双机rank0统一61.47.19.68:8810，双机rank1为61.47.19.70。 |
+
+这次处于**配置/加载与部署协议**阶段：它固定后续比较所用的服务入口，不代表NPU graph、128k/1k、精度或性能已经通过。CPU侧23项参数展开、kernel注册和语法测试已通过；实际NPU验证仍按“先eager启动和短请求，再graph，再128k/1k容量/压力，最后精度与性能正式采集”的顺序执行。概念上对应学习手册[23.5 外部kernel包是另一条调用路径](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4178)、[23.7 Eager和Graph必须分开建立能力](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)、[24.4 Dense draft在DP Attention下如何分组](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4268)和[28.7 评测协议如何与参考值对齐](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4747)。
+
 **2026-09-14当前执行：单机DSpark static graph依次跑模型卡七类数据的固定样本接受率、EvalScope全量GPQA-Diamond精度，再跑GSM8K 300题精度及接受率。直接按[当前单机测试](#modelcard-50-current)执行。** 之前的双机GPQA/GSP流程继续保留为历史与后续入口，不是这次单机测试的前置步骤。
 
 <a id="modelcard-50-current"></a>
@@ -25,7 +82,7 @@ python3 devtools/glm52_ms1/run_modelcard_50_single.py download
 
 固定样本此前从仓库内完整GSM8K test及其余公开数据集生成：每项选择由seed固定的最多100行窗口，再在窗口中无放回抽样。窗口起点、数据行数、实际样本ID和prompt哈希均保留在样本文件中，后续eager/graph复用同一文件。
 
-本轮七数据集入口已经默认设为`dspark-graph`和`61.47.19.68`，这两项不需要再改。如果服务已经按graph启动，直接运行下方客户端命令。若尚未启动，在服务器的`devtools/glm52_ms1/single_dspark_static.sh`开头将`MODE='dspark'`、`GRAPH=1`、`MS1_HOST='61.47.19.68'`填好，再执行`bash devtools/glm52_ms1/single_dspark_static.sh`；保留草稿块长8、验证输入9。测试脚本只连接服务，不会把eager服务切换成graph。
+本轮七数据集入口已经默认设为`dspark-graph`和`61.47.19.68`，这两项不需要再改。如果服务已经按graph启动，直接运行下方客户端命令。若尚未启动，在服务器的`devtools/glm52_ms1/single_dspark_static.sh`开头将`MODE='dspark'`、`GRAPH=1`、`HOST='61.47.19.68'`填好，再执行`bash devtools/glm52_ms1/single_dspark_static.sh`；保留草稿块长8、验证输入9。测试脚本只连接服务，不会把eager服务切换成graph。
 
 单机graph服务启动后，在61.47.19.68同一容器另开的**客户端终端**执行：
 
@@ -40,7 +97,7 @@ python3 devtools/glm52_ms1/run_modelcard_50_single.py run
 
 这是独立的精度评测，使用EvalScope 1.11.1官方`evalscope eval`入口和GPQA作者仓库的完整198题。它不使用上面的模型卡接受率抽样，也不把答案发给模型。脚本会在68自动准备独立EvalScope环境和本地CSV；评测阶段通过`dataset_args.local_path`离线读取，不再访问ModelScope，也不修改正在运行的服务Python。若内网代理替换HTTPS证书，脚本只对固定的作者数据地址用`curl -k`重试；解压后必须同时满足198题、必需字段和脚本固定的官方CSV SHA256，否则不会开始评测。
 
-本轮参数沿用仓库GLM-5.2 GPQA测试的0-shot、temperature 1.0、max_tokens 65536；单机并发设为4。服务启动前，把`single_dspark_static.sh`顶部设为`MODE='dspark'`、`GRAPH=1`、`MS1_HOST='61.47.19.68'`、`CONTEXT_LENGTH=69632`。如果服务上下文不足，客户端脚本会直接说明需要修改哪一行，不会开始198题评测。
+本轮参数沿用仓库GLM-5.2 GPQA测试的0-shot、temperature 1.0、max_tokens 65536；单机并发设为4。服务启动前，把`single_dspark_static.sh`顶部设为`MODE='dspark'`、`GRAPH=1`、`HOST='61.47.19.68'`、`CONTEXT_LENGTH=69632`。如果服务上下文不足，客户端脚本会直接说明需要修改哪一行，不会开始198题评测。
 
 服务ready后，在68同一容器另开的客户端终端只执行：
 
@@ -70,8 +127,8 @@ python3 devtools/glm52_ms1/run_gsm8k_300_single.py
 
 **启动服务只用两个脚本，参数直接写在脚本开头。无需single.json、two.json、local.env或single.local.sh。**
 
-- [单机完整启动脚本](single_dspark_static.sh)：在61.47.19.71运行。
-- [双机混部完整启动脚本](two_node_dspark_static.sh)：在61.47.19.71、61.47.19.70各运行一次。
+- [单机完整启动脚本](single_dspark_static.sh)：在61.47.19.68运行。
+- [双机混部完整启动脚本](two_node_dspark_static.sh)：在61.47.19.68、61.47.19.70各运行一次。
 
 已有容器和模型时，直接跳到[单机启动](#step5)或[双机启动](#step6)。新机器按前四节准备。
 
@@ -114,8 +171,7 @@ python3 devtools/glm52_ms1/run_gsm8k_300_single.py
 /home/tyj/glm52-ms1/              日志、结果、缓存，不是代码或模型
 ├── datasets/                    GSM8K、GPQA各10题
 ├── cache/                       下载缓存
-├── evidence/                    环境报告及比较结果
-└── kernel-overlay-*/             启动时自动创建的192维算子加载目录
+└── evidence/                    环境报告及比较结果
 
 /home/weights/
 ├── GLM-5.2-w8a8/                完整量化target模型
@@ -311,70 +367,45 @@ cd /home/tyj/glm52/sglang
 容器已停止时先在宿主机执行docker start glm52-test，再docker exec；不要重复docker run。
 
 <a id="step5"></a>
-## 5. 单机启动
+## 5. 单机正式启动
 
-在61.47.19.71的**容器**里，打开`/home/tyj/glm52/sglang/devtools/glm52_ms1/single_dspark_static.sh`。
-脚本开头已经填好IP和模型路径。正常切换只改这两行：
+单机用于GSM8K、GPQA、DSpark/target-only精度对照，以及eager/graph功能验证。当前节点是61.47.19.68。
+
+打开`/home/tyj/glm52/sglang/devtools/glm52_ms1/single_dspark_static.sh`，通常只改：
 
 ~~~bash
 MODE='dspark'
 GRAPH=0
 ~~~
 
-`MODE='dspark'`用DSpark；`MODE='target-only'`只用target；`MODE='nextn'`用同事的NEXTN配方。
-`GRAPH=0`是eager；把这一整行改成`GRAPH=1`就是graph。**不改后面的if或启动命令，不需要删冒号、问号或补花括号。**
+- `MODE='dspark'`：DSpark static，gamma=8、verify=9。
+- `MODE='target-only'`：相同target、拓扑和内存参数，不启用投机。
+- `MODE='nextn'`：官方NEXTN 3/1/4对照。
+- `GRAPH=0`：eager；`GRAPH=1`：graph。
 
-保存后运行：
+脚本默认69632 context/KV token上限，覆盖GPQA的65536输出预算；128k/1k性能使用下一节双机脚本。启动命令只有一条：
 
 ~~~bash
 cd /home/tyj/glm52/sglang
 bash devtools/glm52_ms1/single_dspark_static.sh
 ~~~
 
-这就是完整启动步骤。脚本自行加载CANN/ATB，设置源码路径并启动服务。看到`server is fired up`后，这个终端继续被占用是正常的。
+脚本会加载CANN/ATB、注册192维kernel、使用当前仓库的SGLang源码并直接启动服务。`server is fired up`后该终端被占用是正常现象，测试命令放在另一个容器终端执行。
 
-| 想运行的模式 | MODE这一行 | GRAPH这一行 |
-|---|---|---|
-| DSpark static eager | MODE='dspark' | GRAPH=0 |
-| DSpark static graph | MODE='dspark' | GRAPH=1 |
-| target-only eager | MODE='target-only' | GRAPH=0 |
-| target-only graph | MODE='target-only' | GRAPH=1 |
-| NEXTN graph | MODE='nextn' | GRAPH=1 |
+启动前若只想核对参数，不访问NPU：
 
-eager/graph是SGLang原有执行方式，不是DSpark引入的。原始命令加`--disable-cuda-graph`选择eager；去掉它，并按同事配方设置`--cuda-graph-bs 16`选择启用图的配置。`GRAPH=0/1`只是脚本替你增删这些参数；`--cuda-graph-bs`设置捕获批量，不是独立开关。NPU沿用带cuda字样的参数名。
-
-**当前TP32/DP4的图批次说明（2026-09-11，sync 7a93c2be53源码核对）**：保持当前DP Attention/DeepEP、CP1且未额外开启two-batch-overlap时，对齐单位为Attention TP=32/4=8。公共捕图选择要求`batch×每请求token行数`能被8整除；DSpark static的Target Verify每请求9行，所以目标验证图批次为8、16等，最小8；草稿每请求8行，仅此对齐规则允许batch1。batch指每DP的请求槽位，实际少量请求可补齐到图批次，不要求先凑够8个真实请求。若服务仍是`--max-running-requests 8`，每DP实际请求池大小为2，图上限向上对齐为8；脚本写`--cuda-graph-bs 16`也会被公共选择逻辑裁成8。只写1会让目标验证图没有合法批次。这里核验了源码批次选择函数，未在NPU捕图；不能据此承诺显存足够或整模型graph已通过。当前继续GRAPH=0完成11.0容量与长输入检查，之后首次graph候选可显式用`--cuda-graph-bs 8`，两台保持一致。源码见[get_batch_sizes_to_capture](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/model_executor/runner/base_cuda_graph_runner.py:64)、[对齐规则](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/utils/common.py:3908)和[每DP请求池上限](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/mem_cache/kv_cache_configurator.py:2202)。分组概念见学习手册[24.4 Dense draft在DP Attention下如何分组](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4268)，该章integration快照只用于解释分组，当前捕图取值以上述sync源码为准。
-
-单机沿用TP16/DP1。DSpark是block8/verify9；NEXTN是steps4/topk1/draft5。
-`CONTEXT_LENGTH=16384`用于先跑短题；准备128k输入/1k输出时改为`CONTEXT_LENGTH=133120`。
-这是允许的序列长度，实际KV容量仍要另行检查，不能据这一行认定能装下128k。
-
-脚本沿用`with_kernel_checkout.py`加载本次192维Python算子候选，其他二进制仍用镜像安装包；不要求重编译、不替换已安装包。此步骤不包含a3_stuck分支的DeepEP二进制修复。
-`MS1_STATE='/home/tyj/glm52-ms1'`只是工具缓存和运行记录的位置，已填好，不需要先生成任何JSON。
-
-**旧镜像怎样运行分支里的DSpark适配？** 镜像提供Python、Torch/torch-npu、CANN、Triton及已安装二进制依赖；服务实际用哪份Python代码由两个现有启动脚本决定。容器已挂载/home，两台分别准备同一提交的两个仓库，顶部SGLANG_REPO和KERNEL_REPO指向它们即可：
-
-| 部分 | 当前脚本的加载方式 |
-|---|---|
-| SGLang框架/模型的已提交适配 | 将/home/tyj/glm52/sglang/python放在PYTHONPATH前面，再运行python3 -m sglang.launch_server；加载该目录当前检出的源码，而非仅依赖镜像预装SGLang |
-| 192维融合算子 | with_kernel_checkout.py读取/home/tyj/glm52/sgl-kernel-npu/python/sgl_kernel_npu/sgl_kernel_npu/norm/split_qkv_rmsnorm_rope.py，复制到本次私有加载目录；其余sgl_kernel_npu文件和.so链接到镜像安装包，导入核验成功后启动服务 |
-| 其他依赖和DeepEP二进制 | 继续使用当前容器已安装版本；拉取kernel源码不会自动更新.so或DeepEP备用包 |
-
-192适配当前是Triton Python源码，首次调用按需编译/使用编译缓存，不要求先build整个kernel包。若后续改的是C++/AscendC等预编译二进制，必须另行构建并安装相应wheel或重打镜像；目前的单文件组合不会自动带入kernel仓其他改动。两台仓库应各自检出相同的审定提交；同名分支不能代替commit一致性。
-
-仍只执行原single_dspark_static.sh或two_node_dspark_static.sh，不需要手工export PYTHONPATH或复制安装包。启动日志会打印Kernel overlay evidence、Frozen candidate的路径/commit以及Kernel import verified；对应目录的manifest.json和import.json保存候选哈希、导入来源与使用的镜像二进制路径。该核验确认算子导入来源，不等于模型或性能通过。普通docker exec新开的终端不继承服务脚本设置的PYTHONPATH，因此直接import看到镜像旧包是可能的，不能据此否定服务的覆盖加载。kernel候选在启动时复制，更新两个仓库后都需重启服务才能稳定测试新版本。
-
-本轮被测版本应描述为“基础镜像 + SGLang提交 + kernel候选提交（及如有的另装DeepEP包）”，不能只给镜像标签就声称它已包含个人分支代码。无需为已有Python适配重建当前容器；镜像/依赖兼容性和整模型graph/128k仍以实测为准。
+~~~bash
+bash devtools/glm52_ms1/single_dspark_static.sh --print-command
+~~~
 
 <a id="step6"></a>
-## 6. 双机混部启动
+## 6. 双机混部正式启动
 
-两台都完成前四节，使用相同的镜像、SGLang/kernel提交和完整模型。双机是两台机器一起承载同一个服务，客户端只访问61.47.19.71:8810。
+双机用于131072输入、1024输出，prefix cache 0%/50%/90%，并发1～4，以及DSpark、target-only、NEXTN性能对照。两台使用相同镜像、SGLang commit、kernel commit和模型文件。
 
-在**两台容器**里打开同一个文件：
-`/home/tyj/glm52/sglang/devtools/glm52_ms1/two_node_dspark_static.sh`。
+两台都打开`/home/tyj/glm52/sglang/devtools/glm52_ms1/two_node_dspark_static.sh`，保持MODE、GRAPH和其他参数完全相同，只改NODE_RANK：
 
-61.47.19.71上，开头写：
+61.47.19.68：
 
 ~~~bash
 MODE='dspark'
@@ -382,7 +413,7 @@ GRAPH=0
 NODE_RANK=0
 ~~~
 
-61.47.19.70上，开头写：
+61.47.19.70：
 
 ~~~bash
 MODE='dspark'
@@ -390,42 +421,24 @@ GRAPH=0
 NODE_RANK=1
 ~~~
 
-两台的MODE、GRAPH和模型参数保持一致，**只有NODE_RANK不同**。切graph就在两台都改`GRAPH=1`。
+脚本默认网卡为`enp196s0f0`。只有新机器的`ls /sys/class/net`没有这个名字时，才同时修改顶部`HCCL_SOCKET_IFNAME`和`GLOO_SOCKET_IFNAME`；不使用lo，也不让脚本猜路由。
 
-脚本已填两台IP、HTTP端口8810和分布式初始化端口50000。网卡默认按本机通往对端的路由自动读取，并打印实际选择；如果部门要求HCCL专用网卡，在开头`HCCL_SOCKET_IFNAME=''`的单引号内填真实名字，Gloo同理。不要填lo。
-
-如果旧脚本报`Configured NIC ... does not exist`，但`ls /sys/class/net`能看到该网卡，这是旧检查可能将`ip`命令失败误报为网卡不存在。已填写两个网卡名时，新检查直接读取`/sys/class/net/网卡名`，不依赖`ip`命令。保留现场配置，在原文件找到下面这一行：
-
-~~~bash
-  if [ "$PRINT_COMMAND" -eq 0 ] && ! ip link show dev "$nic" >/dev/null 2>&1; then
-~~~
-
-只将这一行改为：
-
-~~~bash
-  if [ "$PRINT_COMMAND" -eq 0 ] && [ ! -d "/sys/class/net/$nic" ]; then
-~~~
-
-随后重新执行同一个启动脚本，保留现场填写的IP、网卡名和NODE_RANK。此修复只处理启动前检查，仍由`with_kernel_checkout.py`组合分支192算子与镜像依赖，不需要手改安装包。网卡目录存在不等于双机通信已通；如果继续报不存在，先核对是否在此前列出网卡的同一个容器。若进入kernel加载或SGLang初始化，按下一条实际异常定位。
-
-在61.47.19.71的容器运行：
+先在68执行，再立即在70执行同一条命令，不等68单独ready：
 
 ~~~bash
 cd /home/tyj/glm52/sglang
 bash devtools/glm52_ms1/two_node_dspark_static.sh
 ~~~
 
-随后在61.47.19.70的容器运行**同一条命令**：
+正式双机默认TP32/DP4、133120 context/KV token上限、最大并发4、chunked prefill 16384，并保留radix cache以测试prefix命中。graph模式两台都改`GRAPH=1`，捕获decode batch 8。
+
+两台启动前可以分别只看最终命令：
 
 ~~~bash
-cd /home/tyj/glm52/sglang
-bash devtools/glm52_ms1/two_node_dspark_static.sh
+bash devtools/glm52_ms1/two_node_dspark_static.sh --print-command
 ~~~
 
-不要等第一台完全ready才启动第二台：第一台要等第二台加入。两台都启动后再发客户端请求。
-
-双机沿用待实测的TP32/DP8配置，启用DP Attention和DP lm_head；不是本轮给框架新增并行限制。
-`CONTEXT_LENGTH=133120`用于计划中的长输入；先测短题时两台都可改16384。context上限不等于实际KV容量。
+`--print-command`不检查容器网卡；真实启动会检查顶部填写的网卡是否存在。HTTP客户端只访问rank0的`http://61.47.19.68:8810`。
 
 <a id="step7"></a>
 ## 7. 检查、停止与更新
@@ -434,9 +447,9 @@ bash devtools/glm52_ms1/two_node_dspark_static.sh
 
 ~~~bash
 docker exec -it glm52-test bash
-curl -sS --noproxy '*' http://61.47.19.71:8810/health
-curl -sS --noproxy '*' http://61.47.19.71:8810/v1/models
-curl -sS --noproxy '*' http://61.47.19.71:8810/v1/chat/completions \
+curl -sS --noproxy '*' http://61.47.19.68:8810/health
+curl -sS --noproxy '*' http://61.47.19.68:8810/v1/models
+curl -sS --noproxy '*' http://61.47.19.68:8810/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"GLM-5.2-w8a8","messages":[{"role":"user","content":"你好"}],"temperature":0,"max_tokens":64,"return_spec_tokens_details":true}'
 ~~~
@@ -476,7 +489,8 @@ git pull
 | two_node_dspark_static.sh | 当前双机混部完整启动脚本 |
 | two_node_colocated/run_tests.py | 本轮双机测试唯一日常入口：准备数据、精度、缓存检查、压力与对比表 |
 | run_gsm8k_single.sh | 单机服务启动后的GSM8K十题入口；只需让顶部MODE与服务一致，然后直接运行 |
-| with_kernel_checkout.py | 两个启动脚本内部使用的192维算子加载工具，无需单独操作 |
+| register_glm52_dspark_kernel.py | 两个正式启动脚本内部使用的192维Python算子注册工具，无需单独操作 |
+| with_kernel_checkout.py | 历史debug overlay工具；正式启动路径不再调用 |
 | bench_gsm8k_modes.py / GSM8K_MODES.md | 已有单机GSM8K十题客户端及协议；旧launch配置方法已由本页两个脚本替代 |
 | bench_gsp_prefix.py / GSP_PREFIX.md | 已有单机131072/1024三档缓存诊断客户端及协议 |
 | two_node_colocated/ | 先前的双机测试客户端、结果比较和归档工具；里面的launch.py/配置模板不再作为服务启动入口 |
@@ -489,7 +503,7 @@ git pull
 
 **目的**：先锁定相同的题目、服务版本与测试口径，再比较。当前单机GSM8K接受率不能替代双机精度、graph或长输入压力结果。本节只准备客户端数据，不占用模型服务。
 
-本页先沿用节点0=61.47.19.71、节点1=61.47.19.70，每台16逻辑NPU，TP32/DP8。若本次节点0换成61.47.19.69，在两台的two_node_dspark_static.sh里把NODE0_HOST改为61.47.19.69，同时把run_tests.py顶部HOST改为61.47.19.69。两个仓库在/home/tyj/glm52下是**并列**关系；不要在sglang目录里面再clone kernel。
+正式双机节点0=61.47.19.68、节点1=61.47.19.70，每台16逻辑NPU，TP32/DP4。两个仓库在/home/tyj/glm52下是**并列**关系；不要在sglang目录里面再clone kernel。
 
 先按第7节更新两端代码。模型和镜像按第2至4节准备；源码提交、镜像digest、模型制品须一致。客户端在节点0同一个容器另开终端运行，使用镜像自带Python，不进入evalscope-venv。
 
@@ -574,7 +588,7 @@ RESULTS默认/home/tyj/glm52-ms1/dual-node-validation-20260910。日志留在第
 
 **注意：`accuracy --dataset gsm8k`只选择数据集，不是“全量”开关。当前仓库默认仍为`GSM8K_LIMIT = 10`、`GSM8K_SOURCE = ""`，直接使用默认值会跑自带十题；必须按下文改成1319及完整源文件路径。** 运行开头应打印`gsm8k: 固定1319题 -> /home/tyj/glm52-ms1/datasets/gsm8k-1319.json`；若打印固定10题/`gsm8k-10.json`，本次就是十题。已有运行直接查看当次开头和结果中的`accuracy.samples`，无需重跑确认。源文件不足1319题时会报错，不会自动退回十题。
 
-**当前节点0为61.47.19.68，节点1为61.47.19.69。** 全量精度通常指GSM8K **main/test的1319题**，不是把7473条训练数据混入测试。[官方test文件](https://github.com/openai/grade-school-math/blob/master/grade_school_math/data/test.jsonl)。当前仓库只自带十题，因此超过十题必须提供完整本地数据。评分、请求内容和接受计数继续复用原工具；只改客户端，不重启服务、不安装EvalScope。
+**当前节点0为61.47.19.68，节点1为61.47.19.70。** 全量精度通常指GSM8K **main/test的1319题**，不是把7473条训练数据混入测试。[官方test文件](https://github.com/openai/grade-school-math/blob/master/grade_school_math/data/test.jsonl)。当前仓库只自带十题，因此超过十题必须提供完整本地数据。评分、请求内容和接受计数继续复用原工具；只改客户端，不重启服务、不安装EvalScope。
 
 先在**能联网的PC终端**下载（Windows PowerShell将`curl`写成`curl.exe`）：
 
@@ -687,198 +701,32 @@ python3 devtools/glm52_ms1/two_node_colocated/run_tests.py accuracy --dataset gp
 本地已按以上改法核验prepare、两个独立accuracy入口、各20个请求和原生num-prompts20，以及GPQA不足20题时拒绝执行。使用真实GSM8K源和合成GPQA解析样例，未跑NPU或取得GPQA真实准确率；没有新脚本/依赖/推送。已有源位置为[dataset_settings](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/devtools/glm52_ms1/two_node_colocated/run_tests.py:69)，学习[28.7评测协议](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4747)用于理解固定样本、提示与预算；integration教材不替代当前sync代码。
 
 <a id="gpqa-full-current"></a>
-### 9.6 当前：68/70双机、DSpark graph、EvalScope全量GPQA-D
+### 9.6 全量GPQA-D说明
 
-**2026-09-13当前顺序**：按负责人要求直接跑graph全量，跳过十题GSM8K。使用68为node0、70为node1，TP32/DP4、static；当前把draft候选数从gamma5降为gamma4，对应Target verify总宽度从6降为5。GPQA-Diamond全量为198题（不是GPQA其它子集），同一次EvalScope运行同时评分和采集A/P/N。NPU操作由负责人执行；尚未取得本轮graph实机结果。
-
-#### 为什么gamma4必须与verify5一起修改
-
-0805草稿制品的`block_size=8`被解析为默认gamma=8。它不是从accept len推导出的最优值，也不是A3或双机强制要求。当前源码允许CLI覆盖：`--speculative-dspark-block-size`优先确定gamma，`--speculative-num-draft-tokens`必须等于gamma+1；只改其中一个会发生冲突。**本次同时设置4和5，不改权重config.json。** 启动时可能看到checkpoint gamma8与运行gamma4不一致的warning，这是显式覆盖的预期提示；仍需看到服务ready且客户端核准4/5。
-
-这处改动处于**配置→draft proposal→target verify→accept/commit**：gamma4每轮产生4个草稿候选，Target验证输入为anchor+4候选，共5行。全部接受时最多输出4个草稿token和1个bonus；提前拒绝时，额外的target token是纠正token。验证输入的anchor与新输出的bonus不是同一个token。
-
-依据当前sync基线`35edd9ec4b5a7329fcccf85dc71c248a2fa71353`：[配置优先级及gamma+1校验](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/arg_groups/speculative_hook.py:627)、[运行时显式覆盖](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/speculative/dspark_components/dspark_config.py:108)。学习手册[17.2 gamma的名称合同](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:3449)帮助区分两种计数，[18.2/18.3 草稿与静态验证](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:3575)解释每轮的输入和输出。教材是integration概念快照，本轮参数合同以此sync源码为准。
-
-若N为请求×验证轮数，A为被接受草稿token总数，static gamma固定时P=gamma×N。服务日志的平均接受长度`L=1+A/N`，接受率`R=A/P=(L-1)/gamma`。gamma4需要`L>3.0`才能满足严格`R>0.5`。缩短gamma会同时改变接受率分母和每轮最多提交的token数，因此gamma4的接受率不能直接与gamma5比较；是否加速必须另行实测。
-
-#### 第一步：两端修改已有启动脚本并启动graph
-
-**不要用仓库模板覆盖服务器已跑通的.sh。** 保留已经跑通的DP4显存/分块参数、context/KV133120、max-running-requests4、DeepEP和192 overlay；70也使用相同代码、模型制品和有效网卡。只更新节点地址、graph开关，并核对gamma4/verify5。
-
-等旧客户端结束，在两台**服务终端**停止本次旧服务。然后在68和70的服务容器分别打开同一个文件：
-
-~~~bash
-cd /home/tyj/glm52/sglang
-vi devtools/glm52_ms1/two_node_dspark_static.sh
-~~~
-
-按`i`进入编辑。两台顶部都设置以下值，另外68的`NODE_RANK=0`，70的`NODE_RANK=1`：
-
-~~~bash
-MODE='dspark'
-GRAPH=1
-NODE0_HOST='61.47.19.68'
-NODE1_HOST='61.47.19.70'
-~~~
-
-DSpark分支设置`--speculative-dspark-block-size 4 --speculative-num-draft-tokens 5`。若现场仍是5/6或8/9，把这两个值同时改为4/5，与本轮全量工具一致；不修改NEXTN分支。在后半段含`--cuda-graph-bs`的行把16改8：
-
-~~~bash
-if [ "$GRAPH" = 1 ]; then SERVER_ARGS+=(--cuda-graph-bs 8); else SERVER_ARGS+=(--disable-cuda-graph); fi
-~~~
-
-保留`ENABLE_METRICS=1`。按`Esc`、输入`:wq`、回车保存。TP32/DP4的Attention TP为8；本轮Target宽5、Draft宽4，bs8覆盖两条图的对齐档位，实际捕图列表还会受runtime约束。static由`SGLANG_RAGGED_VERIFY_MODE=static`设置，P=4N本身不能证明static模式。
-
-在**68服务容器**启动并保存本次服务日志：
-
-~~~bash
-cd /home/tyj/glm52/sglang
-mkdir -p /home/tyj/glm52-ms1/evidence
-set -o pipefail
-bash devtools/glm52_ms1/two_node_dspark_static.sh 2>&1 | tee /home/tyj/glm52-ms1/evidence/server-gpqa-gamma4-node0.log
-~~~
-
-在**70服务容器**运行：
-
-~~~bash
-cd /home/tyj/glm52/sglang
-mkdir -p /home/tyj/glm52-ms1/evidence
-set -o pipefail
-bash devtools/glm52_ms1/two_node_dspark_static.sh 2>&1 | tee /home/tyj/glm52-ms1/evidence/server-gpqa-gamma4-node1.log
-~~~
-
-服务占用终端是正常的。68启动后就启动70，不要等68ready才启动70。查看`Capture target verify NPU graph ... end`和`Capture draft verify NPU graph ... end`，等68显示ready再进入第二步。若捕图OOM/通信异常，先处理第一处错误，不直接调大mem fraction。同名服务日志会由tee重写；若重跑，先保留上次两份日志。
-
-#### 第二步：在68另开客户端终端，跑一次全量
-
-客户端使用`/home/tyj/glm52-ms1/evalscope-venv`中的EvalScope 1.11.1；服务进程继续使用镜像Python。本轮工具已经推到个人`sync/glm52-dspark-ms1`。因为服务器上的双机启动脚本有手工调整，不直接pull覆盖现场；在**68容器的客户端终端**只更新本次需要的GPQA文件：
-
-~~~bash
-cd /home/tyj/glm52/sglang
-git fetch origin sync/glm52-dspark-ms1
-git restore --source origin/sync/glm52-dspark-ms1 -- devtools/glm52_ms1/run_gpqa_diamond.py
-~~~
-
-它顶部已设`GRAPH=True`、地址68，复用同目录原有`gsm8k_mode_stats.py`分析图计数。不改旧run_tests.py的十题设置，也不改两台现场启动脚本。
-
-若执行评测命令时报`/home/tyj/glm52-ms1/evalscope-venv/bin/python: No such file or directory`，说明当前68容器还没有这套客户端环境。在**68容器的客户端终端**直接执行下面四条命令；使用阿里PyPI镜像，只安装到独立目录，不修改服务Python，也不需要停止双机服务：
-
-~~~bash
-mkdir -p /home/tyj/glm52-ms1
-python3 -m venv /home/tyj/glm52-ms1/evalscope-venv
-/home/tyj/glm52-ms1/evalscope-venv/bin/python -m pip install -i https://mirrors.aliyun.com/pypi/simple evalscope==1.11.1
-/home/tyj/glm52-ms1/evalscope-venv/bin/python -c "from evalscope import TaskConfig, run_task; print('EvalScope 1.11.1 import OK')"
-~~~
-
-最后一行打印`EvalScope 1.11.1 import OK`即表示客户端依赖已经准备好。只在68准备；70仅运行服务，不安装EvalScope。
-
-数据沿用[9.1](#step9)从GPQA作者仓库取得的`/home/tyj/glm52-ms1/datasets/gpqa_diamond.csv`。必须是完整198题的Diamond原始CSV，不能使用gpqa-20.json或仅20行CSV。只需在68准备，题目不传70。测试脚本先核对198个唯一题目和必需字段；在自己的输出目录内部复制为独立CSV目录，供EvalScope原生loader读取。实际检查确认直接CSV文件路径会失败，父目录又混有GSM文件，因此内部复制是必要的最小处理，不增加用户步骤或手写配置。
-
-另开SSH，在**68宿主机**进入已有容器：
-
-~~~bash
-docker exec -it glm52-test bash
-~~~
-
-在这个**客户端容器终端**执行全量命令：
-
-~~~bash
-cd /home/tyj/glm52/sglang
-/home/tyj/glm52-ms1/evalscope-venv/bin/python devtools/glm52_ms1/run_gpqa_diamond.py
-~~~
-
-若现场容器用了不同名称，docker exec只替换glm52-test为原容器名。不需要source另一个配置文件；可选`--check-only`只检查已有依赖和完整CSV，不发模型请求，但不代替实际EvalScope加载与服务验证。
-
-本轮参数固定为：`gpqa_diamond`、train、0-shot、全198题、每题1次、并发4、temperature1.0、max_tokens65536、seed42、官方规则评分；不设limit、不复用旧回答、不自动重试/重跑取最好值、不配置外部judge。提示、选项排列、答案提取和accuracy均由EvalScope 1.11.1实现。采样温度与输出预算取自[仓库GLM-5.2 GPQA配方](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/test/registered/npu/accuracy/glm5_2/test_npu_glm_5_2_w4a8_16p_gpqa.py:99)，该社区例子为W4A8/NEXTN，不能称已复现当前W8A8/DSpark的91.2原始协议。负责人确认没有此前91.2命令，91.2继续作为本次指定参考值。
-
-为保存服务响应中的`sglext`原始计数，本轮使用非流式，超时7200秒，且将社区并发32改为当前服务相适应的4；不改变提示/评分或服务采样算法。EvalScope流式拼接会丢失sglext，普通CLI无法保留精确计数，因此脚本只在官方`on_response`回调保存A/P/N；无框架改动、无新的部署依赖。非流式等待期间客户端可能长时间没有逐token输出，服务日志仍显示推理进展；这里的客户端延迟不用于TTFT/TPOT验收。
-
-#### 第三步：读精度和接受率，决定下一步
-
-脚本开始和结束均打印本次目录：`/home/tyj/glm52-ms1/evidence/gpqa-d-graph-gamma4-…/`，每次自动新建，不会把旧回答当本轮结果。目录中：
-
-- `summary.json`：198题完成情况、正确数、精度、A/P/N、接受率、接受长度、length结束数，以及两个独立判定。
-- `inference.jsonl`：同次198个唯一响应的服务端原始接受计数，含response_id，可关联EvalScope原始回答。按请求完整计数覆盖尾轮和各DP，不重复累计TP副本。
-- `reports/`、`reviews/`、`predictions/`：EvalScope官方报告、评分、题目及原始回答；`server-info.json`、`run-settings.json`记录本次运行设置。
-- `metrics.before.txt`、`metrics.after.txt`及`summary.json`中的`graph`：记录测试前后Target decode/verify图计数增量；若抓取失败则保存error.json，不能当零计数。测试期间其它客户端保持空闲。HTTP未提供独立draft replay计数，Target图增长不能证明每轮draft也回放。
-
-精度按此前自测参考**90.2%≤accuracy≤92.2%**，198题单次对应**179～182题正确**；高于92.2%也按约定标记超出区间，应复核协议，不解释成质量退化。接受率按**sum(A)/sum(P)>0.5**，严格用整数`2×sum(A)>sum(P)`判断，0.5不通过。length结束仍留在198分母并单独列出，不删题；失败、缺计数、重复响应或未评分全198题均为INCOMPLETE。客户端发题前核对graph backend和enable-metrics，结束后再次核对模式；未观察到Target图计数增长则标INCOMPLETE，已完成精度及接受计数仍保留，另存evaluation_status。两个数值条件满足且取得图回放证据才输出PASS；仍不是全链路graph、压力性能或相对target-only不降精度的结论。
-
-同时查看**两端服务终端**的`accept len: …, accept rate: …`日志。它们是各DP周期观察，只保留两位小数、可能漏掉未输出的最后统计窗口；不要直接平均各行或各DP，也不要将`0.50`当严格通过。最终全程结论以本轮`inference.jsonl`里的服务端计数汇总为准，不用completion_tokens反推。源码见[日志公式](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/managers/scheduler_components/metrics_reporter.py:896)、[响应计数入口](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-ms1-sync/python/sglang/srt/entrypoints/openai/utils.py:158)；学习[28.9/28.10 接受率与采集陷阱](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4780)解释为何不能只看长度或平均百分比。
-
-如果精度和接受率都通过，保存本轮资料后再进入性能对比；精度偏低先查看截断/原始回答与协议，必要时同题同参数做target-only对照；精度通过但接受率≤0.5时看gamma4的真实长度与请求分布，不改分母或重跑择优；启动/请求/依赖失败则先修对应故障，未完成的运行不计为精度失败或成功。参考[EvalScope官方API与本地数据说明](https://evalscope.readthedocs.io/en/latest/get_started/basic_usage.html)。
-
-本地验证：既有CSV加载与SDK回调检查保留为上轮证据；本轮增加graph模式、计数缺失/回退/重置检查，详见[实际diff和逐项审视](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/reviews/2026-09-10-two-node-colocated-tests/README.md:3)。NPU全量、实际精度、接受率及graph回放待负责人实测；工具提交`53adfe7c35`已推到个人sync分支，随后仅补运行文档。
+2026-09-13曾使用gamma=4/verify=5和旧overlay脚本做过临时实验；该配置已经退出正式协议，不再照旧段落修改启动脚本。正式精度对照一律使用本页顶部脚本的gamma=8/verify=9，并保持DSpark与target-only的数据、prompt、采样参数、输出预算和服务拓扑一致。EvalScope客户端操作继续使用本页“单机GPQA-Diamond全量精度”入口；部署只使用第5、6节两个正式脚本。
 
 <a id="step10"></a>
 ## 10. 精度对照：四组十题流程，全量前固定同一协议
 
 <a id="graph-smoke-current"></a>
-### 10.1 当前68/69、TP32/DP4：先做DSpark graph十题验证
+### 10.1 DSpark graph十题冒烟
 
-**阶段与目的**：当前eager已能启动并执行精度请求；本轮检查相同部署开启graph后能否捕图、启动和完成连续生成，并在同一次10题请求中记录正确数和接受率。尚未验证整模型graph，不把旧192单算子graph通过当作本轮结论。128k/1k的容量要求继续保留；短GSM8K通过后，仍需另测长输入与并发。
+目的：先确认正式双机graph能完成捕图、启动和连续生成，再投入全量精度或128k压力。两台停止旧服务，在正式双机脚本顶部都设置`MODE='dspark'`、`GRAPH=1`；68使用`NODE_RANK=0`，70使用`NODE_RANK=1`。不要再手改graph参数、gamma或kernel路径，正式脚本已经固定decode graph batch 8、gamma8/verify9和192维注册。
 
-等当前精度测试结束并记下Evidence目录，才在68、69两台服务终端分别按`Ctrl+C`停止旧服务。**不用git pull覆盖服务脚本，也不更换容器、kernel overlay或DeepEP包。** 在两台的当前服务容器内打开已经跑通的文件：
+两台立即先后运行：
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-vi devtools/glm52_ms1/two_node_dspark_static.sh
-~~~
-
-按`i`进入编辑。顶部设置`MODE='dspark'`（若当前是target-only，也要切回dspark），把`GRAPH=0`改成`GRAPH=1`。在文件后半段找到含`--cuda-graph-bs`的这一行，仅把捕图档位从16改为8，完整行如下；`else`后面的禁用参数留着，它只在GRAPH=0时使用：
-
-~~~bash
-if [ "$GRAPH" = 1 ]; then SERVER_ARGS+=(--cuda-graph-bs 8); else SERVER_ARGS+=(--disable-cuda-graph); fi
-~~~
-
-按`Esc`、输入`:wq`、回车保存。两台只调整上述模式和捕图选项，其余沿用当前成功的DSpark eager配置：
-
-| 项目 | 本轮设置 |
-|---|---|
-| 节点 | 68的NODE_RANK=0；69的NODE_RANK=1；两台NODE0_HOST为68、NODE1_HOST为69 |
-| 并行与并发上限 | TP32、DP4、EP32、max-running-requests=4；DP Attention与DP LM head保留 |
-| 容量 | CONTEXT_LENGTH=133120、MAX_TOTAL_TOKENS=133120；不能为了短题启动改回16k |
-| 显存与分块 | mem-fraction-static、chunked-prefill-size、max-prefill-tokens保留本次eager成功值；两台一致 |
-| DSpark | static、block8、verify9、QuaRot original、draft unquant及当前192算子overlay保留 |
-| 图 | GRAPH=1，--cuda-graph-bs 8；此次先验证decode/target verify及draft模型图，prefill图以实际backend为准 |
-
-**为什么是8**：本轮TP32/DP4且CP1，每组Attention TP为8；当前DeepEP路径要求图的token行数满足8的对齐。Target Verify每请求9行，因此`batch_size × 9`要整除8，最小正档位是8（未启用two-batch-overlap）。这不是最多只能并发8，也不是客户端必须并发8；十题仍并发1，runtime按图档位补齐计算。draft每请求8行，捕图列表还会受自身请求池和并行上下文约束，以其启动日志为准。显式只给8可避免不必要的大档位配置；不承诺捕图显存按比例下降或一定能启动。
-
-两台分别运行同一个命令，**不要等68启动完成才启动69**：
-
-~~~bash
 bash devtools/glm52_ms1/two_node_dspark_static.sh
 ~~~
 
-查看两端启动日志中的`Capture target verify NPU graph begin/end`和`Capture draft verify NPU graph begin/end`；begin行会打印实际backend、每请求行数、捕图bs和余量。等68显示`server is fired up`，再在68的另一个客户端终端运行测试。若捕图报OOM，先保留第一处异常及前面的捕图bs/显存日志；不要直接上调mem-fraction-static，它不会减少现有权重或固定KV的实际占用，也不保证增加捕图可用空间。此次尚未实机捕图，不能提前归因于DeepEP问题。
-
-在68客户端打开测试入口：
-
-~~~bash
-cd /home/tyj/glm52/sglang
-vi devtools/glm52_ms1/two_node_colocated/run_tests.py
-~~~
-
-按`i`，将顶部这几项设为以下值；`GSM8K_SOURCE = ""`表示本次使用仓库自带十题，不删除已经上传的全量文件。模型路径及`ACCURACY_MAX_TOKENS`沿用刚才eager精度测试，避免预算不同：
-
-~~~python
-MODE = "dspark-graph"
-HOST = "61.47.19.68"
-TP_SIZE = 32
-DP_SIZE = 4
-GSM8K_LIMIT = 10
-GSM8K_SOURCE = ""
-~~~
-
-按`Esc`、输入`:wq`、回车保存，然后只运行：
+保留两端启动日志，确认target verify和draft相关graph capture完成；若OOM，保存第一处异常和前面的捕图/HBM日志，不先改参数掩盖。rank0 ready后，在68客户端把`two_node_colocated/run_tests.py`顶部设为`MODE = "dspark-graph"`、`HOST = "61.47.19.68"`、`TP_SIZE = 32`、`DP_SIZE = 4`、`GSM8K_LIMIT = 10`，运行：
 
 ~~~bash
 python3 devtools/glm52_ms1/two_node_colocated/run_tests.py accuracy --dataset gsm8k
 ~~~
 
-开头应打印`gsm8k: 固定10题`。本次只测GSM8K、不跑GPQA；温度0、并发1、真实EOS，同一批请求同时评分和采集A/P/N，不需要再发另一轮接受率请求。结束后把终端摘要及Evidence目录下`summary.json`贴回：检查10题是否全部完成、正确数、截断/未解析项、`acceptance.accept_rate=sum(A)/sum(P)`，以及`graph.target_replay_observed`是否为true。服务没有其他测试流量时，图计数增长支持Target Verify实际回放；HTTP没有独立draft replay计数，draft捕图完成也不单独证明每轮draft都回放。该十题结果不等于全量精度或压力接受率>50%准出，非流式TTFT/TPOT不用于性能比较。
-
-本轮只对齐参数和补充手册，没有修改SGLang框架、算子或测试入口。核对基线为sync `35edd9ec4b`：图档位过滤在`python/sglang/srt/model_executor/runner/base_cuda_graph_runner.py:get_batch_sizes_to_capture`，对齐因子在`python/sglang/srt/utils/common.py:get_cuda_graph_batch_size_alignment`，Target/Draft NPU捕图日志在`python/sglang/srt/model_executor/model_runner_components/cuda_graph_setup.py:capture_decode_graph`，测试图计数在`devtools/glm52_ms1/two_node_colocated/client_common.py:graph_evidence`。项目学习手册23.7解释eager与graph证据为何分开，24.4解释dense draft的TP/DP分组；教材integration快照用于概念说明，本轮判断依据上述sync源码。
+十题需要全部完成，并同时保存正确数、A/P/N接受率和graph replay证据。它只用于冒烟，不能代替全量精度、128k/1k或并发性能准出。
 
 ### 10.2 后续四组精度对照
 
@@ -938,7 +786,7 @@ python3 devtools/glm52_ms1/two_node_colocated/run_tests.py accuracy
 <a id="capacity-first"></a>
 ### 11.0 更新客户端后，跑原生quick
 
-现有68/69服务保持已跑通的TP32/DP4、DSpark eager、context与KV上限133120，以及当前显存和chunk参数。当前容量check已通过；此前未分块长prefill发生过OOM，负责人随后已能运行0%和50%档，但低接受率原因仍未闭环。更新本客户端无需重启服务。启动参数历史解释留在本轮审视记录，不再作为新启动步骤。
+68/70服务使用本页正式双机脚本的TP32/DP4、DSpark eager、context与KV上限133120、chunked prefill 16384。启动并通过容量check后再运行客户端；低接受率仍作为结果记录和后续定位输入，不通过改写负载掩盖。
 
 **仅更新客户端两个文件，不覆盖两端已手改的启动脚本。** 在68服务容器的客户端终端执行。第一行复制现有客户端留底，之后只取本轮客户端和手册：
 
@@ -1051,7 +899,7 @@ python3 devtools/glm52_ms1/two_node_colocated/run_tests.py report
 - 主社区已合入[PR #785：A3混部DeepEP挂死修复](https://github.com/sgl-project/sgl-kernel-npu/pull/785)，合入提交87153b4；本次核验主干f4b858ce与上述候选的csrc/deepep/ops目录无差异。**这不表示0904镜像中的二进制已经带修复**；不能单靠包版本日期判断。
 - 该修复为normal与low-latency通信重新划分HCCL window中的通知、状态和selector区域，避免混部模式切换时互相覆盖。新布局由DEEPEP_HYBRID_DEPLOYMENT启用。数据区仍有共享约束，不代表可以任意并发两种通信。
 - 安装对象是完整**deep_ep wheel**，包括Python接口、deep_ep_cpp扩展及vendors/hwcomputing自定义算子。不是只换一个.py或.so，也不是重装sgl_kernel_npu、Torch、torch-npu、CANN或驱动。
-- 现有192维Python算子overlay继续由启动.sh加载；它不会自动重编译或替代DeepEP。
+- 192维Python算子由正式启动脚本调用注册工具写入当前容器安装包；它不会自动重编译或替代DeepEP。
 
 固定候选和当前主干的build.sh内容相同。本地实际执行过help：**正确写法是bash build.sh -h；--help不被这个脚本接受**。只编DeepEP使用-a deepep；直接bash build.sh会构建其他包，本预案不用。
 
@@ -1366,7 +1214,7 @@ bash devtools/glm52_ms1/two_node_dspark_static.sh
 
 | 当前环节 | 已有源码与本轮改动 | 阅读目的 |
 |---|---|---|
-| 双机配置/加载 | [two_node_dspark_static.sh](two_node_dspark_static.sh)，本轮保持服务参数 | 看MODE/GRAPH怎样变成已有启动参数 |
+| 双机配置/加载 | [two_node_dspark_static.sh](two_node_dspark_static.sh)，本轮收敛为正式部署参数 | 看MODE/GRAPH怎样变成最终服务参数 |
 | 精度请求与Accept统计 | [bench_accuracy.py](two_node_colocated/bench_accuracy.py)、[gsm8k_mode_stats.py](gsm8k_mode_stats.py)；新增[run_tests.py](two_node_colocated/run_tests.py)直接传顶部设置，复用评分与计数 | 同次HTTP响应既评分也取A/P/N |
 | cache与压力 | [bench_prefix.py](two_node_colocated/bench_prefix.py)复用[serving.py](../../python/sglang/benchmark/serving.py)发送/计时，新增直接参数入口和记录实际服务配置 | 看每DP预热、实际长度/缓存校验和聚合分母 |
 | 对照结果 | [report.py](two_node_colocated/report.py)新增一张精度/性能矩阵，比较实际输入指纹，保留最新失败 | 防止比较不同请求或择优挑结果 |
