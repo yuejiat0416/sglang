@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT = Path(__file__).with_name("two_node_dspark_static.sh")
+SCRIPT = Path(__file__).with_name("two_node_dspark_official.sh")
 
 
 def preview(

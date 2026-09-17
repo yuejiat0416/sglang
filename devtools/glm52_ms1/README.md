@@ -4,8 +4,10 @@
 
 后续精度、性能和测试交付统一使用下面两个脚本；它们取代本文后面保留的历史启动配方：
 
-- [single_dspark_static.sh](single_dspark_static.sh)：单机TP16，用于GSM8K、GPQA、eager/graph功能与精度对照。
-- [two_node_dspark_static.sh](two_node_dspark_static.sh)：双机TP32/DP4，用于131072输入、1024输出、并发1～4及prefix cache性能测试。
+- [single_dspark_official.sh](single_dspark_official.sh)：单机TP16，用于GSM8K、GPQA、eager/graph功能与精度对照。
+- [two_node_dspark_official.sh](two_node_dspark_official.sh)：双机TP32/DP4，用于131072输入、1024输出、并发1～4及prefix cache性能测试。
+
+原有`single_dspark_static.sh`和`two_node_dspark_static.sh`已恢复为调试工具兼容入口，供既有快照、旧GSM8K和历史诊断流程继续使用；正式部署和转测只使用上面两个新脚本。
 
 两个脚本直接基于[SGLang官方GLM-5.2 A3部署命令](https://docs.sglang.io/docs/hardware-platforms/ascend-npus/model-deployment/tutorials/glm_5_2)维护CPU、CANN、通信、DeepEP、chunked prefill和graph基线。启动前只在脚本顶部改普通赋值：`MODE`、`GRAPH`；双机再让两台的`NODE_RANK`分别为0和1。没有JSON、local.env、额外启动器或手工export步骤。
 
@@ -68,16 +70,16 @@ DSpark固定使用static、QuaRot original、草稿gamma=8、Target Verify窗口
 
 本轮固定取官方GSM8K main/test前50题、GPQA-Diamond前10题，均为0-shot、seed 42、不打乱。GSM8K使用temperature 0、最多4096输出token、并发4；GPQA使用temperature 0、最多65536输出token、并发1。GPQA并发1是为了让单条长推理独占当前69632 KV容量，避免先前并发请求触发KV cache retraction后把调度压力混进精度结果。10/50题只作快速对照，不设绝对精度PASS线；判断DSpark精度是否下降，需要随后用target-only服务原样重跑同一命令。
 
-先按[单机正式启动](#step5)启动服务。要测DSpark graph，就只把`single_dspark_static.sh`顶部设为`MODE='dspark'`、`GRAPH=1`；服务ready后在68同一容器另开的客户端终端执行：
+先按[单机正式启动](#step5)启动服务。要测DSpark graph，就只把`single_dspark_official.sh`顶部设为`MODE='dspark'`、`GRAPH=1`；服务ready后在68同一容器另开的客户端终端执行：
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-git restore devtools/glm52_ms1/single_dspark_static.sh
+git restore devtools/glm52_ms1/single_dspark_official.sh
 git pull origin sync/glm52-dspark-ms1
 bash devtools/glm52_ms1/run_accuracy_samples_single.sh
 ~~~
 
-`single_dspark_static.sh`是需要在顶部手工修改`MODE`和`GRAPH`的正式启动脚本。以后更新代码前先用上面的`git restore`丢弃这两项本地参数修改，再执行普通`git pull`；更新后重新填写`MODE`和`GRAPH`。不要对这个脚本使用`git pull --autostash`，否则远端同时更新脚本时，Git恢复本地参数可能写入`<<<<<<<`冲突标记，脚本将无法执行。
+`single_dspark_official.sh`是需要在顶部手工修改`MODE`和`GRAPH`的正式启动脚本。以后更新代码前先用上面的`git restore`丢弃这两项本地参数修改，再执行普通`git pull`；更新后重新填写`MODE`和`GRAPH`。不要对这个脚本使用`git pull --autostash`，否则远端同时更新脚本时，Git恢复本地参数可能写入`<<<<<<<`冲突标记，脚本将无法执行。
 
 脚本使用仓库自带的1319题GSM8K test，以及已经存在的`/home/tyj/glm52-ms1/datasets/gpqa_diamond.csv`。若EvalScope环境不存在，脚本会在`/home/tyj/glm52-ms1/evalscope-venv`创建并从阿里PyPI镜像安装固定的1.11.1版本；数据集始终离线读取，不访问ModelScope。两套题顺序执行、分别评分和统计，结果根目录会打印为`Evidence:`；总表是其中的`summary.json`，每个数据集还有`evalscope-report.json`、`summary.json`和逐请求`acceptance.jsonl`。
 
@@ -100,7 +102,7 @@ DSpark结果中的`accept_rate`严格按`sum(A)/sum(P)`计算，同时保留A/P/
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-git restore devtools/glm52_ms1/single_dspark_static.sh
+git restore devtools/glm52_ms1/single_dspark_official.sh
 git pull origin sync/glm52-dspark-ms1
 python3 devtools/glm52_ms1/run_modelcard_50_single.py download
 ~~~
@@ -109,7 +111,7 @@ python3 devtools/glm52_ms1/run_modelcard_50_single.py download
 
 固定样本此前从仓库内完整GSM8K test及其余公开数据集生成：每项选择由seed固定的最多100行窗口，再在窗口中无放回抽样。窗口起点、数据行数、实际样本ID和prompt哈希均保留在样本文件中，后续eager/graph复用同一文件。
 
-本轮七数据集入口已经默认设为`dspark-graph`和`61.47.19.68`，这两项不需要再改。如果服务已经按graph启动，直接运行下方客户端命令。若尚未启动，在服务器的`devtools/glm52_ms1/single_dspark_static.sh`开头将`MODE='dspark'`、`GRAPH=1`、`HOST='61.47.19.68'`填好，再执行`bash devtools/glm52_ms1/single_dspark_static.sh`；保留草稿块长8、验证输入9。测试脚本只连接服务，不会把eager服务切换成graph。
+本轮七数据集入口已经默认设为`dspark-graph`和`61.47.19.68`，这两项不需要再改。如果服务已经按graph启动，直接运行下方客户端命令。若尚未启动，在服务器的`devtools/glm52_ms1/single_dspark_official.sh`开头将`MODE='dspark'`、`GRAPH=1`、`HOST='61.47.19.68'`填好，再执行`bash devtools/glm52_ms1/single_dspark_official.sh`；保留草稿块长8、验证输入9。测试脚本只连接服务，不会把eager服务切换成graph。
 
 单机graph服务启动后，在61.47.19.68同一容器另开的**客户端终端**执行：
 
@@ -124,7 +126,7 @@ python3 devtools/glm52_ms1/run_modelcard_50_single.py run
 
 这是独立的精度评测，使用EvalScope 1.11.1官方`evalscope eval`入口和GPQA作者仓库的完整198题。它不使用上面的模型卡接受率抽样，也不把答案发给模型。脚本会在68自动准备独立EvalScope环境和本地CSV；评测阶段通过`dataset_args.local_path`离线读取，不再访问ModelScope，也不修改正在运行的服务Python。若内网代理替换HTTPS证书，脚本只对固定的作者数据地址用`curl -k`重试；解压后必须同时满足198题、必需字段和脚本固定的官方CSV SHA256，否则不会开始评测。
 
-本轮参数沿用仓库GLM-5.2 GPQA测试的0-shot、temperature 1.0、max_tokens 65536；单机并发设为4。服务启动前，把`single_dspark_static.sh`顶部设为`MODE='dspark'`、`GRAPH=1`、`HOST='61.47.19.68'`、`CONTEXT_LENGTH=69632`。如果服务上下文不足，客户端脚本会直接说明需要修改哪一行，不会开始198题评测。
+本轮参数沿用仓库GLM-5.2 GPQA测试的0-shot、temperature 1.0、max_tokens 65536；单机并发设为4。服务启动前，把`single_dspark_official.sh`顶部设为`MODE='dspark'`、`GRAPH=1`、`HOST='61.47.19.68'`、`CONTEXT_LENGTH=69632`。如果服务上下文不足，客户端脚本会直接说明需要修改哪一行，不会开始198题评测。
 
 服务ready后，在68同一容器另开的客户端终端只执行：
 
@@ -154,8 +156,8 @@ python3 devtools/glm52_ms1/run_gsm8k_300_single.py
 
 **启动服务只用两个脚本，参数直接写在脚本开头。无需single.json、two.json、local.env或single.local.sh。**
 
-- [单机完整启动脚本](single_dspark_static.sh)：在61.47.19.68运行。
-- [双机混部完整启动脚本](two_node_dspark_static.sh)：在61.47.19.68、61.47.19.70各运行一次。
+- [单机完整启动脚本](single_dspark_official.sh)：在61.47.19.68运行。
+- [双机混部完整启动脚本](two_node_dspark_official.sh)：在61.47.19.68、61.47.19.70各运行一次。
 
 已有容器和模型时，直接跳到[单机启动](#step5)或[双机启动](#step6)。新机器按前四节准备。
 
@@ -398,7 +400,7 @@ cd /home/tyj/glm52/sglang
 
 单机用于GSM8K、GPQA、DSpark/target-only精度对照，以及eager/graph功能验证。当前节点是61.47.19.68。
 
-打开`/home/tyj/glm52/sglang/devtools/glm52_ms1/single_dspark_static.sh`，通常只改：
+打开`/home/tyj/glm52/sglang/devtools/glm52_ms1/single_dspark_official.sh`，通常只改：
 
 ~~~bash
 MODE='dspark'
@@ -414,7 +416,7 @@ GRAPH=0
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-bash devtools/glm52_ms1/single_dspark_static.sh
+bash devtools/glm52_ms1/single_dspark_official.sh
 ~~~
 
 脚本会加载CANN/ATB、注册192维kernel、使用当前仓库的SGLang源码并直接启动服务。`server is fired up`后该终端被占用是正常现象，测试命令放在另一个容器终端执行。
@@ -422,7 +424,7 @@ bash devtools/glm52_ms1/single_dspark_static.sh
 启动前若只想核对参数，不访问NPU：
 
 ~~~bash
-bash devtools/glm52_ms1/single_dspark_static.sh --print-command
+bash devtools/glm52_ms1/single_dspark_official.sh --print-command
 ~~~
 
 <a id="step6"></a>
@@ -430,7 +432,7 @@ bash devtools/glm52_ms1/single_dspark_static.sh --print-command
 
 双机用于131072输入、1024输出，prefix cache 0%/50%/90%，并发1～4，以及DSpark、target-only、NEXTN性能对照。两台使用相同镜像、SGLang commit、kernel commit和模型文件。
 
-两台都打开`/home/tyj/glm52/sglang/devtools/glm52_ms1/two_node_dspark_static.sh`，保持MODE、GRAPH和其他参数完全相同，只改NODE_RANK：
+两台都打开`/home/tyj/glm52/sglang/devtools/glm52_ms1/two_node_dspark_official.sh`，保持MODE、GRAPH和其他参数完全相同，只改NODE_RANK：
 
 61.47.19.68：
 
@@ -454,7 +456,7 @@ NODE_RANK=1
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-bash devtools/glm52_ms1/two_node_dspark_static.sh
+bash devtools/glm52_ms1/two_node_dspark_official.sh
 ~~~
 
 正式双机默认TP32/DP4、133120 context/KV token上限、最大并发4、chunked prefill 16384，并保留radix cache以测试prefix命中。graph模式两台都改`GRAPH=1`，捕获decode batch 8。
@@ -462,7 +464,7 @@ bash devtools/glm52_ms1/two_node_dspark_static.sh
 两台启动前可以分别只看最终命令：
 
 ~~~bash
-bash devtools/glm52_ms1/two_node_dspark_static.sh --print-command
+bash devtools/glm52_ms1/two_node_dspark_official.sh --print-command
 ~~~
 
 `--print-command`不检查容器网卡；真实启动会检查顶部填写的网卡是否存在。HTTP客户端只访问rank0的`http://61.47.19.68:8810`。
@@ -489,10 +491,10 @@ HTTP正常返回只证明当前请求能完成。DSpark接受计数查看`sglext
 
 ~~~bash
 mkdir -p /home/tyj/glm52-ms1
-bash devtools/glm52_ms1/single_dspark_static.sh 2>&1 | tee /home/tyj/glm52-ms1/single-server.log
+bash devtools/glm52_ms1/single_dspark_official.sh 2>&1 | tee /home/tyj/glm52-ms1/single-server.log
 ~~~
 
-双机把文件名改成`two_node_dspark_static.sh`、日志名改成`two-server.log`，每台的日志留在各自宿主机。再次使用相同日志名会覆盖上次，需保留旧记录时先改日志名。
+双机把文件名改成`two_node_dspark_official.sh`、日志名改成`two-server.log`，每台的日志留在各自宿主机。再次使用相同日志名会覆盖上次，需保留旧记录时先改日志名。
 
 更新个人分支代码，先停止服务，在每台宿主机依次执行：
 
@@ -512,8 +514,8 @@ git pull
 
 | 文件/目录 | 用途 |
 |---|---|
-| single_dspark_static.sh | 当前单机完整启动脚本 |
-| two_node_dspark_static.sh | 当前双机混部完整启动脚本 |
+| single_dspark_official.sh | 当前单机完整启动脚本 |
+| two_node_dspark_official.sh | 当前双机混部完整启动脚本 |
 | run_accuracy_samples_single.sh / .py | 当前单机EvalScope精度抽样入口：GSM8K 50题、GPQA-Diamond 10题及同批A/P/N |
 | two_node_colocated/run_tests.py | 本轮双机测试唯一日常入口：准备数据、精度、缓存检查、压力与对比表 |
 | run_gsm8k_single.sh | 单机服务启动后的GSM8K十题入口；只需让顶部MODE与服务一致，然后直接运行 |
@@ -745,7 +747,7 @@ python3 devtools/glm52_ms1/two_node_colocated/run_tests.py accuracy --dataset gp
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-bash devtools/glm52_ms1/two_node_dspark_static.sh
+bash devtools/glm52_ms1/two_node_dspark_official.sh
 ~~~
 
 保留两端启动日志，确认target verify和draft相关graph capture完成；若OOM，保存第一处异常和前面的捕图/HBM日志，不先改参数掩盖。rank0 ready后，在68客户端把`two_node_colocated/run_tests.py`顶部设为`MODE = "dspark-graph"`、`HOST = "61.47.19.68"`、`TP_SIZE = 32`、`DP_SIZE = 4`、`GSM8K_LIMIT = 10`，运行：
@@ -773,7 +775,7 @@ python3 devtools/glm52_ms1/two_node_colocated/run_tests.py accuracy --dataset gs
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-bash devtools/glm52_ms1/two_node_dspark_static.sh
+bash devtools/glm52_ms1/two_node_dspark_official.sh
 ~~~
 
 等节点0显示server is fired up。在节点0**客户端终端**运行：
@@ -1196,7 +1198,7 @@ PY
 export DEEPEP_HYBRID_DEPLOYMENT=1
 export DEEP_USE_MODE=default
 cd /home/tyj/glm52/sglang
-bash devtools/glm52_ms1/two_node_dspark_static.sh
+bash devtools/glm52_ms1/two_node_dspark_official.sh
 ~~~
 
 当前启动.sh会继承这两个变量，作用于全部32个rank。**不能只在客户端设置，不能只设置节点0。**该分支用“环境变量是否存在”判断HYBRID，写0或空字符串不等于关闭；关闭需unset。
@@ -1230,7 +1232,7 @@ source /usr/local/Ascend/nnal/atb/set_env.sh
 python3 -m pip show deep-ep
 python3 -c "import deep_ep; print(deep_ep.__file__)"
 cd /home/tyj/glm52/sglang
-bash devtools/glm52_ms1/two_node_dspark_static.sh
+bash devtools/glm52_ms1/two_node_dspark_official.sh
 ~~~
 
 两端一起回退，不能一端新包一端旧包。/home里的临时构建目录和证据继续保留；服务恢复后重新核对模式和小请求。
@@ -1242,7 +1244,7 @@ bash devtools/glm52_ms1/two_node_dspark_static.sh
 
 | 当前环节 | 已有源码与本轮改动 | 阅读目的 |
 |---|---|---|
-| 双机配置/加载 | [two_node_dspark_static.sh](two_node_dspark_static.sh)，本轮收敛为正式部署参数 | 看MODE/GRAPH怎样变成最终服务参数 |
+| 双机配置/加载 | [two_node_dspark_official.sh](two_node_dspark_official.sh)，本轮收敛为正式部署参数 | 看MODE/GRAPH怎样变成最终服务参数 |
 | 精度请求与Accept统计 | [bench_accuracy.py](two_node_colocated/bench_accuracy.py)、[gsm8k_mode_stats.py](gsm8k_mode_stats.py)；新增[run_tests.py](two_node_colocated/run_tests.py)直接传顶部设置，复用评分与计数 | 同次HTTP响应既评分也取A/P/N |
 | cache与压力 | [bench_prefix.py](two_node_colocated/bench_prefix.py)复用[serving.py](../../python/sglang/benchmark/serving.py)发送/计时，新增直接参数入口和记录实际服务配置 | 看每DP预热、实际长度/缓存校验和聚合分母 |
 | 对照结果 | [report.py](two_node_colocated/report.py)新增一张精度/性能矩阵，比较实际输入指纹，保留最新失败 | 防止比较不同请求或择优挑结果 |

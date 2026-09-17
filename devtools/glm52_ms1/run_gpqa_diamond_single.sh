@@ -92,7 +92,7 @@ PY
 CONTEXT_LENGTH=$(curl -fsS 'http://61.47.19.68:8810/get_server_info' | "$VENV/bin/python" -c 'import json,sys; print(json.load(sys.stdin)["context_length"])')
 if [ "$CONTEXT_LENGTH" -lt 69632 ]; then
   echo "当前服务context_length=$CONTEXT_LENGTH，GPQA的65536输出预算要求至少69632。" >&2
-  echo "请停止服务，把single_dspark_static.sh顶部CONTEXT_LENGTH改成69632后重新启动，再运行本脚本。" >&2
+  echo "请停止服务，把single_dspark_official.sh顶部CONTEXT_LENGTH改成69632后重新启动，再运行本脚本。" >&2
   exit 2
 fi
 

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT = Path(__file__).with_name("single_dspark_static.sh")
+SCRIPT = Path(__file__).with_name("single_dspark_official.sh")
 
 
 def preview(tmp_path: Path, *, mode: str = "dspark", graph: int = 0) -> list[str]:
