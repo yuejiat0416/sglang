@@ -72,9 +72,12 @@ DSpark固定使用static、QuaRot original、草稿gamma=8、Target Verify窗口
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-git pull --autostash origin sync/glm52-dspark-ms1
+git restore devtools/glm52_ms1/single_dspark_static.sh
+git pull origin sync/glm52-dspark-ms1
 bash devtools/glm52_ms1/run_accuracy_samples_single.sh
 ~~~
+
+`single_dspark_static.sh`是需要在顶部手工修改`MODE`和`GRAPH`的正式启动脚本。以后更新代码前先用上面的`git restore`丢弃这两项本地参数修改，再执行普通`git pull`；更新后重新填写`MODE`和`GRAPH`。不要对这个脚本使用`git pull --autostash`，否则远端同时更新脚本时，Git恢复本地参数可能写入`<<<<<<<`冲突标记，脚本将无法执行。
 
 脚本使用仓库自带的1319题GSM8K test，以及已经存在的`/home/tyj/glm52-ms1/datasets/gpqa_diamond.csv`。若EvalScope环境不存在，脚本会在`/home/tyj/glm52-ms1/evalscope-venv`创建并从阿里PyPI镜像安装固定的1.11.1版本；数据集始终离线读取，不访问ModelScope。两套题顺序执行、分别评分和统计，结果根目录会打印为`Evidence:`；总表是其中的`summary.json`，每个数据集还有`evalscope-report.json`、`summary.json`和逐请求`acceptance.jsonl`。
 
@@ -97,11 +100,12 @@ DSpark结果中的`accept_rate`严格按`sum(A)/sum(P)`计算，同时保留A/P/
 
 ~~~bash
 cd /home/tyj/glm52/sglang
-git pull --autostash origin sync/glm52-dspark-ms1
+git restore devtools/glm52_ms1/single_dspark_static.sh
+git pull origin sync/glm52-dspark-ms1
 python3 devtools/glm52_ms1/run_modelcard_50_single.py download
 ~~~
 
-`--autostash`用于更新后恢复你已经修改的脚本参数，例如68的IP。成功会打印七项样本数和“固定样本已准备”文件路径；这一阶段只准备数据，不向模型发请求。
+更新后若要重启服务，再重新填写启动脚本顶部的`MODE`和`GRAPH`。成功会打印七项样本数和“固定样本已准备”文件路径；这一阶段只准备数据，不向模型发请求。
 
 固定样本此前从仓库内完整GSM8K test及其余公开数据集生成：每项选择由seed固定的最多100行窗口，再在窗口中无放回抽样。窗口起点、数据行数、实际样本ID和prompt哈希均保留在样本文件中，后续eager/graph复用同一文件。
 
