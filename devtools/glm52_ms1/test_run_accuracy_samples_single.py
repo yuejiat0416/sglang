@@ -6,6 +6,13 @@ import pytest
 import run_accuracy_samples_single as runner
 
 
+def test_local_evalscope_subsets_match_generic_file_builder():
+    assert {spec["name"]: spec["subset_list"] for spec in runner.DATASETS} == {
+        "gsm8k": ["default"],
+        "gpqa_diamond": ["default"],
+    }
+
+
 def server(speculative=True):
     return {
         "device": "npu",

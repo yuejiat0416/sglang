@@ -33,6 +33,7 @@ DATASETS = (
         "limit": 50,
         "source": GSM8K_SOURCE,
         "local_name": "test.jsonl",
+        "subset_list": ["default"],
         "few_shot_num": 0,
         "concurrency": 4,
         "max_tokens": 4096,
@@ -44,6 +45,7 @@ DATASETS = (
         "limit": 10,
         "source": GPQA_SOURCE,
         "local_name": "train.csv",
+        "subset_list": ["default"],
         "few_shot_num": 0,
         "concurrency": 1,
         "max_tokens": 65536,
@@ -317,6 +319,7 @@ def run_dataset(
         dataset_args={
             name: {
                 "local_path": str(local_data),
+                "subset_list": spec["subset_list"],
                 "few_shot_num": spec["few_shot_num"],
                 "few_shot_random": False,
                 "shuffle": False,
