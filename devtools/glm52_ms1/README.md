@@ -49,7 +49,7 @@ DSpark固定使用static、QuaRot original、草稿gamma=8、Target Verify窗口
 |---|---|
 | 双机拓扑 | 从临时TP32/DP8改为TP32/DP4、最大并发4。已有实机证据表明这一拓扑能分配133120 KV tokens；每个并发可落到一个DP lane。 |
 | 长上下文 | 双机固定`CONTEXT_LENGTH=MAX_TOTAL_TOKENS=133120`，覆盖131072输入和1024输出并保留调度余量。单机固定69632，覆盖GPQA的65536输出预算。 |
-| `mem-fraction-static` | 单机0.70沿用官方值；双机从官方0.80降到0.73。后者来自现有DSpark实机：为graph保留更多非静态HBM，同时DP4仍取得133120 KV tokens。每次仍以启动日志和`server_info`回读为准。 |
+| `mem-fraction-static` | 单机改为0.825，来自当前DSpark单机启动实测，较低值无法满足本配置的静态内存分配；双机保持0.73，DP4已有分配133120 KV tokens的实机证据。每次仍以启动日志和`server_info`回读为准。 |
 | chunked prefill | 从旧脚本禁用改为官方16384分块；长输入分段prefill，降低单次计算的峰值压力。 |
 | DSpark窗口 | 删除临时gamma=4/verify=5实验，恢复checkpoint block_size=8对应的gamma=8/verify=9，作为正式精度和接受率协议。 |
 | NEXTN参数 | 从旧同事配方4/1/5改为当前官方GLM-5.2示例3/1/4，作为独立对照组。 |

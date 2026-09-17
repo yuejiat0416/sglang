@@ -46,7 +46,7 @@ def test_single_modes_and_graph(tmp_path: Path, mode: str, graph: int):
     assert option(argv, "--max-total-tokens") == "69632"
     assert option(argv, "--chunked-prefill-size") == "16384"
     assert option(argv, "--max-prefill-tokens") == "280000"
-    assert option(argv, "--mem-fraction-static") == "0.70"
+    assert option(argv, "--mem-fraction-static") == "0.825"
     assert option(argv, "--max-running-requests") == "4"
     assert "--enable-metrics" in argv
     assert "--enable-cache-report" in argv
