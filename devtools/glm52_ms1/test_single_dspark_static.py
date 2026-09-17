@@ -80,7 +80,11 @@ def test_single_script_is_direct_and_syntax_valid():
     assert "export SGLANG_ENABLE_SPEC_V2" not in text
     assert "unset SGLANG_ENABLE_SPEC_V2" in text
     assert "GLM52_LEGACY_LAUNCH" not in text
-    assert 'export PYTHONPATH="$SGLANG_REPO/python"' in text
+    assert "ASCEND_LAUNCH_BLOCKING PYTHONPATH" in text
+    assert 'export PYTHONPATH="$SGLANG_REPO/python${PYTHONPATH:+:$PYTHONPATH}"' in text
+    assert text.index("ASCEND_LAUNCH_BLOCKING PYTHONPATH") < text.index(
+        "source /usr/local/Ascend/ascend-toolkit/set_env.sh"
+    ) < text.index('export PYTHONPATH="$SGLANG_REPO/python${PYTHONPATH:+:$PYTHONPATH}"')
     assert "unset SGLANG_SIMULATE_UNIFORM_EXPERTS" in text
     assert subprocess.run(["bash", "-n", str(SCRIPT)]).returncode == 0
     help_result = subprocess.run(

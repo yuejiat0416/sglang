@@ -57,7 +57,7 @@ DSpark固定使用static、QuaRot original、草稿gamma=8、Target Verify窗口
 | 双机radix cache | 官方双机示例关闭radix cache；本项目要测0%/50%/90% prefix cache，因此保留开启状态。 |
 | 观测参数 | 原来可选的metrics改为固定开启，并继续开启cache report，保证所有正式对照组都有同一观测入口。 |
 | `--print-command` | 保留旧脚本已有能力，但现在只展开直接的`launch_server`参数，不再显示overlay包装器或访问NPU。 |
-| Python环境 | `PYTHONPATH`固定为当前SGLang源码，启动前清除旧debug、模拟接受率和scheduler调试变量，避免正式结果继承调试终端状态。 |
+| Python环境 | 启动前清除旧终端的`PYTHONPATH`，加载CANN/ATB环境后再把当前SGLang源码放到最前面；既路由到本分支代码，也保留`tbe`等CANN模块路径。旧debug、模拟接受率和scheduler调试变量同样清除。 |
 | 服务地址 | 单机和双机rank0统一61.47.19.68:8810，双机rank1为61.47.19.70。 |
 
 这次处于**配置/加载与部署协议**阶段：它固定后续比较所用的服务入口，不代表NPU graph、128k/1k、精度或性能已经通过。CPU侧23项参数展开、kernel注册和语法测试已通过；实际NPU验证仍按“先eager启动和短请求，再graph，再128k/1k容量/压力，最后精度与性能正式采集”的顺序执行。概念上对应学习手册[23.5 外部kernel包是另一条调用路径](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4178)、[23.7 Eager和Graph必须分开建立能力](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)、[24.4 Dense draft在DP Attention下如何分组](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4268)和[28.7 评测协议如何与参考值对齐](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4747)。
