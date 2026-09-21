@@ -1,9 +1,17 @@
 import csv
 import json
+from pathlib import Path
 
 import pytest
 
 import run_accuracy_samples_single as runner
+
+
+def test_evalscope_install_trust_is_scoped_to_aliyun_mirror():
+    script = (Path(__file__).parent / "run_accuracy_samples_single.sh").read_text()
+    assert "-i https://mirrors.aliyun.com/pypi/simple" in script
+    assert "--trusted-host mirrors.aliyun.com" in script
+    assert "--trusted-host pypi.org" not in script
 
 
 def test_local_evalscope_subsets_match_generic_file_builder():

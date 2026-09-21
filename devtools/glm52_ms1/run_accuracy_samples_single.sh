@@ -10,7 +10,10 @@ if [ ! -x "$VENV/bin/python" ]; then
   python3 -m venv "$VENV"
 fi
 if ! "$VENV/bin/python" -c 'import importlib.metadata,sys; sys.exit(importlib.metadata.version("evalscope") != "1.11.1")' 2>/dev/null; then
-  "$VENV/bin/python" -m pip install -i https://mirrors.aliyun.com/pypi/simple evalscope==1.11.1
+  "$VENV/bin/python" -m pip install \
+    -i https://mirrors.aliyun.com/pypi/simple \
+    --trusted-host mirrors.aliyun.com \
+    evalscope==1.11.1
 fi
 
 exec "$VENV/bin/python" devtools/glm52_ms1/run_accuracy_samples_single.py
