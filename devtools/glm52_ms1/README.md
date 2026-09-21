@@ -81,7 +81,7 @@ bash devtools/glm52_ms1/run_accuracy_samples_single.sh
 
 `single_dspark_official.sh`是需要在顶部手工修改`MODE`和`GRAPH`的正式启动脚本。以后更新代码前先用上面的`git restore`丢弃这两项本地参数修改，再执行普通`git pull`；更新后重新填写`MODE`和`GRAPH`。不要对这个脚本使用`git pull --autostash`，否则远端同时更新脚本时，Git恢复本地参数可能写入`<<<<<<<`冲突标记，脚本将无法执行。
 
-脚本使用仓库自带的1319题GSM8K test，以及已经存在的`/home/tyj/glm52-ms1/datasets/gpqa_diamond.csv`。若EvalScope环境不存在，脚本会在`/home/tyj/glm52-ms1/evalscope-venv`创建并从阿里PyPI镜像安装固定的1.11.1版本；为兼容当前内网的自签名证书链，只对`mirrors.aliyun.com`设置pip信任，不关闭其他地址的证书校验。数据集始终离线读取，不访问ModelScope。两套题顺序执行、分别评分和统计，结果根目录会打印为`Evidence:`；总表是其中的`summary.json`，每个数据集还有`evalscope-report.json`、`summary.json`和逐请求`acceptance.jsonl`。
+脚本使用仓库自带的1319题GSM8K test，以及已经存在的`/home/tyj/glm52-ms1/datasets/gpqa_diamond.csv`。若EvalScope环境不存在，脚本会在`/home/tyj/glm52-ms1/evalscope-venv`创建，并直接安装阿里镜像中固定且带SHA256校验的EvalScope 1.11.1 wheel，避免当前内网证书链导致pip把索引失败误报成版本不存在；其余依赖仍从阿里PyPI镜像解析。脚本只对`mirrors.aliyun.com`设置pip信任，不关闭其他地址的证书校验。数据集始终离线读取，不访问ModelScope。两套题顺序执行、分别评分和统计，结果根目录会打印为`Evidence:`；总表是其中的`summary.json`，每个数据集还有`evalscope-report.json`、`summary.json`和逐请求`acceptance.jsonl`。
 
 DSpark结果中的`accept_rate`严格按`sum(A)/sum(P)`计算，同时保留A/P/N和`1+sum(A)/sum(N)`。它是这批精度请求的接受率，不是多并发压测准出。随后切为`MODE='target-only'`、保持GRAPH和其余服务参数不变，重启后再次执行同一条命令；target-only报告会把接受率明确记为不适用。两次EvalScope报告才能用于观察精度是否下降。
 

@@ -13,7 +13,7 @@ if ! "$VENV/bin/python" -c 'import importlib.metadata,sys; sys.exit(importlib.me
   "$VENV/bin/python" -m pip install \
     -i https://mirrors.aliyun.com/pypi/simple \
     --trusted-host mirrors.aliyun.com \
-    evalscope==1.11.1
+    'https://mirrors.aliyun.com/pypi/packages/33/19/4915c3012c2245fe8dfd84d2d5af2378f198f6931d9d9677fd59908d642e/evalscope-1.11.1-py3-none-any.whl#sha256=5058c5112ee0dfff0048a48ee1ff9c6e1ca28bbed39ef5cd34a6a14d3ddf2b66'
 fi
 
 exec "$VENV/bin/python" devtools/glm52_ms1/run_accuracy_samples_single.py

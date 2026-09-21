@@ -11,6 +11,8 @@ def test_evalscope_install_trust_is_scoped_to_aliyun_mirror():
     script = (Path(__file__).parent / "run_accuracy_samples_single.sh").read_text()
     assert "-i https://mirrors.aliyun.com/pypi/simple" in script
     assert "--trusted-host mirrors.aliyun.com" in script
+    assert "evalscope-1.11.1-py3-none-any.whl" in script
+    assert "sha256=5058c5112ee0dfff0048a48ee1ff9c6e1ca28bbed39ef5cd34a6a14d3ddf2b66" in script
     assert "--trusted-host pypi.org" not in script
 
 
