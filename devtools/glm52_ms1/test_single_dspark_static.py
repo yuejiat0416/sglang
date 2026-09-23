@@ -38,6 +38,16 @@ def option(argv: list[str], key: str) -> str:
 @pytest.mark.parametrize("graph", (0, 1))
 def test_single_modes_and_graph(tmp_path: Path, mode: str, graph: int):
     argv = preview(tmp_path, mode=mode, graph=graph)
+    if mode == "dspark":
+        assert argv[:2] == [
+            "SGLANG_RAGGED_VERIFY_MODE=static",
+            "SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT=true",
+        ]
+        argv = argv[2:]
+    else:
+        assert not any(
+            "SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT" in arg for arg in argv
+        )
     assert argv[:3] == ["python3", "-m", "sglang.launch_server"]
     assert option(argv, "--host") == "61.47.19.68"
     assert option(argv, "--tp-size") == "16"

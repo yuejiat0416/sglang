@@ -53,6 +53,16 @@ def test_two_node_modes_graph_and_topology(
         "GLOO_SOCKET_IFNAME=enp196s0f0",
     ]
     argv = argv[2:]
+    if mode == "dspark":
+        assert argv[:2] == [
+            "SGLANG_RAGGED_VERIFY_MODE=static",
+            "SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT=true",
+        ]
+        argv = argv[2:]
+    else:
+        assert not any(
+            "SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT" in arg for arg in argv
+        )
     assert argv[:3] == ["python3", "-m", "sglang.launch_server"]
     assert option(argv, "--host") == (
         "61.47.19.68" if rank == 0 else "61.47.19.70"

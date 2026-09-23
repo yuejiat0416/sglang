@@ -431,6 +431,8 @@ bash devtools/glm52_ms1/single_dspark_official.sh
 bash devtools/glm52_ms1/single_dspark_official.sh --print-command
 ~~~
 
+预览的DSpark命令开头会显示`SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT=true`；target-only和NEXTN预览不会带这个开关。真实启动时脚本也按MODE设置或清除它。
+
 <a id="step6"></a>
 ## 6. 双机混部正式启动
 

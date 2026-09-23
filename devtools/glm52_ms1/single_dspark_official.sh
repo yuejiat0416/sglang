@@ -86,6 +86,9 @@ else
 fi
 
 if [ "$PRINT_COMMAND" = 1 ]; then
+  if [ "$MODE" = dspark ]; then
+    printf 'SGLANG_RAGGED_VERIFY_MODE=static SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT=true '
+  fi
   printf 'python3 -m sglang.launch_server '
   printf '%q ' "${SERVER_ARGS[@]}"
   printf '\n'
