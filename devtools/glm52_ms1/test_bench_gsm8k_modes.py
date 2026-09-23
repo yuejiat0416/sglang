@@ -118,7 +118,7 @@ def test_modes_validate_and_launch_isolated(mode):
     with mock.patch.dict(
         runner.os.environ,
         {
-            "SGLANG_NPU_GLM_DSPARK_QUAROT": "original",
+            "SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT": "true",
             "SGLANG_DSPARK_DEBUG_DUMP": "core",
         },
         clear=True,
@@ -131,9 +131,9 @@ def test_modes_validate_and_launch_isolated(mode):
     assert env["SGLANG_REPO"] == str(runner.REPO)
     assert env["ENABLE_METRICS"] == "1"
     assert "SGLANG_DSPARK_DEBUG_DUMP" not in env
-    assert (env.get("SGLANG_NPU_GLM_DSPARK_QUAROT") == "original") == mode.startswith(
-        "dspark"
-    )
+    assert (
+        env.get("SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT") == "true"
+    ) == mode.startswith("dspark")
 
 
 @pytest.mark.parametrize(

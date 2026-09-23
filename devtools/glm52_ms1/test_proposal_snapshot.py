@@ -57,7 +57,7 @@ def runtime(tmp_path, monkeypatch, request):
     for key, val in dict(HIDDEN=8, HEAD_DIM=4, HEADS=2, QUERIES=8).items():
         monkeypatch.setattr(obs, key, val)
     monkeypatch.setenv("SGLANG_RAGGED_VERIFY_MODE", "static")
-    monkeypatch.setenv("SGLANG_NPU_GLM_DSPARK_QUAROT", "original")
+    monkeypatch.setenv("SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT", "true")
     torch.manual_seed(42)
     (tmp_path / "config.json").write_text("{}")
     weights = tmp_path / "weights"
@@ -651,7 +651,7 @@ def test_launcher_private_bootstrap_and_disabled_import(tmp_path, monkeypatch):
     boot = Path(config["run_dir"]) / "bootstrap"
     assert (boot / "dspark_proposal_snapshot.py").exists()
     assert (boot / "dspark_context_snapshot.py").exists()
-    assert env["SGLANG_NPU_GLM_DSPARK_QUAROT"] == "original"
+    assert env["SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT"] == "true"
     assert env["SGLANG_ENABLE_FAST_INPUT_LOGPROBS"] == "0"
     child_env = os.environ.copy()
     child_env["PYTHONPATH"] = str(HERE)

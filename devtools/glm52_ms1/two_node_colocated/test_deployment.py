@@ -121,9 +121,9 @@ def test_five_modes_rank_parameters_and_isolation(mode, rank):
     assert ("--disable-cuda-graph" in args) == mode.endswith("eager")
     assert env["HCCL_SOCKET_IFNAME"] == cfg["nodes"][rank]["hccl_socket_ifname"]
     assert env["SGLANG_RAGGED_VERIFY_MODE"] == "static"
-    assert (env.get("SGLANG_NPU_GLM_DSPARK_QUAROT") == "original") == mode.startswith(
-        "dspark-"
-    )
+    assert (
+        env.get("SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT") == "true"
+    ) == mode.startswith("dspark-")
     if mode.startswith("dspark-"):
         assert args[args.index("--speculative-algorithm") + 1] == "DSPARK"
         assert args[args.index("--speculative-num-draft-tokens") + 1] == "9"

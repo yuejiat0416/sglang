@@ -18,7 +18,11 @@
 | 单机精度/功能 | TP16 | 69632 / 69632 | 4 | 16 |
 | 双机128k/1k | TP32/DP4 | 133120 / 133120 | 4 | 8 |
 
-DSpark固定使用static、QuaRot original、草稿gamma=8、Target Verify窗口9。NEXTN使用官方示例的steps=3、topk=1、draft tokens=4。`target-only`不带任何投机参数。eager增加`--disable-cuda-graph`；graph使用当前参数名`--cuda-graph-bs-decode`。
+DSpark固定使用static、QuaRot correction=true（草稿权重处于未旋转坐标系）、草稿gamma=8、Target Verify窗口9。NEXTN使用官方示例的steps=3、topk=1、draft tokens=4。`target-only`不带任何投机参数。eager增加`--disable-cuda-graph`；graph使用当前参数名`--cuda-graph-bs-decode`。
+
+`SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT`是布尔开关：当前W8A8 QuaRot target配未旋转草稿时设为`true`，同时启用草稿自有embedding/LM head和加载期FC修正；原生target配与其坐标兼容的草稿时不设置或设为`false`，保留共享target词表且不修正FC。代码不会只看target有Q就自动推断草稿是否需要修正；已离线对齐的草稿不能再次设为`true`。若显式设为`true`，但当前不是NPU、草稿是MoE，或target不是支持的GLM DSA ModelSlim模型，服务会明确警告本次适配没有应用；target声称使用QuaRot但元数据或tensor不完整时直接启动失败。
+
+启用修正时，草稿加载必须经过`load_weights()`且`--weight-cache-mode=off`；不支持的加载方式会在草稿构建前明确报错，避免跳过FC修正却继续运行。启动日志中的`GLM DSpark QuaRot runtime: requested=... enabled=... draft_local_embedding=... draft_local_lm_head=...`用于核对开关是否实际生效；这只证明加载配置，不等于GPQA精度或接受率已通过。
 
 两个启动脚本会调用[register_glm52_dspark_kernel.py](register_glm52_dspark_kernel.py)，把kernel分支中已审定的192维Python算子复制到当前测试容器已安装的`sgl_kernel_npu`包，并打印kernel commit、源/目标路径和SHA256。这样直接组合“当前SGLang源码 + 192维Python算子 + 镜像内其余二进制依赖”，不再创建临时overlay目录。测试容器需要对其site-packages有写权限；用新容器时脚本会再次注册。
 
@@ -794,7 +798,7 @@ python3 devtools/glm52_ms1/two_node_colocated/run_tests.py accuracy
 - eager正常、graph异常：优先查graph输入刷新、metadata、回放和提交状态；不直接归因于草稿训练或192算子。
 - 四组完成后可说“这两份十题样本是否观察到精度下降”。**10题分辨率为10个百分点，不能据此证明整个模型精度不下降。**
 
-当前DSpark沿用static、block8/verify9、QuaRot original、TP32/DP4/EP32；不打开模拟接受率、不用临时替换Attention来美化结果。这里“开启static能力”与“已全部验证通过”分开：
+当前DSpark沿用static、block8/verify9、QuaRot correction=true（草稿权重处于未旋转坐标系）、TP32/DP4/EP32；不打开模拟接受率、不用临时替换Attention来美化结果。这里“开启static能力”与“已全部验证通过”分开：
 
 | 能力 | 本轮证据 | 仍需留意 |
 |---|---|---|

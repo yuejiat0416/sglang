@@ -19,7 +19,7 @@ target-only eager/graph和已有NEXTN graph，观察问题是否随题目/算法
 - 五组共50条正式请求；启动器自己的服务warmup不属于benchmark10题，指标取运行前后差。
 - 当前graph指decode/verify图配置；prefill是否图化以解析配置为准。不能称“全部计算上图”。
 - NEXTN沿用同事配置：steps=4、topk=1、draft_tokens=5；服务解析后algorithm可能显示EAGLE。
-- DSpark使用QuaRot original候选、自有embedding/head和加载时Q-fold。
+- DSpark使用QuaRot correction=true（草稿权重处于未旋转坐标系）、自有embedding/head和加载时Q-fold。
 
 ## 看哪些结果
 

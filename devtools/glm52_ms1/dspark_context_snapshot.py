@@ -155,8 +155,8 @@ class Capture:
             "Diagnostic requires explicit static",
         )
         require(
-            os.environ.get("SGLANG_NPU_GLM_DSPARK_QUAROT") == "original",
-            "Diagnostic requires existing original mode",
+            os.environ.get("SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT") == "true",
+            "Diagnostic requires QuaRot correction enabled",
         )
         require(
             type(self.model).__name__ == "DSparkDraftModel", "Unexpected draft class"
@@ -186,7 +186,7 @@ class Capture:
                 k: os.environ.get(k)
                 for k in (
                     "SGLANG_RAGGED_VERIFY_MODE",
-                    "SGLANG_NPU_GLM_DSPARK_QUAROT",
+                    "SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT",
                     "SGLANG_ENABLE_FAST_INPUT_LOGPROBS",
                 )
             },

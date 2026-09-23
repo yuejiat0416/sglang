@@ -119,7 +119,7 @@ SERVER_ARGS=(
   --enable-cache-report --host "$MS1_HOST" --port "$MS1_PORT"
 )
 if [ "$MODE" = dspark ]; then
-  RUNTIME_ENV+=(SGLANG_NPU_GLM_DSPARK_QUAROT=original)
+  RUNTIME_ENV+=(SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT=true)
   SERVER_ARGS+=(
     --speculative-algorithm DSPARK --speculative-draft-model-path "$DRAFT_MODEL"
     --speculative-draft-model-quantization unquant --speculative-draft-attention-backend ascend
@@ -138,7 +138,7 @@ if [ "$GRAPH" = 1 ]; then SERVER_ARGS+=(--cuda-graph-bs 16); else SERVER_ARGS+=(
 # 只对本次进程选择192维候选Python算子；复用镜像binary，不重装包。
 COMMAND=(
   env -u https_proxy -u http_proxy -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY -u all_proxy
-  -u ASCEND_LAUNCH_BLOCKING -u SGLANG_NPU_GLM_DSPARK_QUAROT
+  -u ASCEND_LAUNCH_BLOCKING -u SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT
   -u SGLANG_DSPARK_DEBUG_DUMP -u GLM52_CONTEXT_SNAPSHOT_CONFIG -u GLM52_PROPOSAL_SNAPSHOT_CONFIG
   -u SGLANG_SIMULATE_ACC_LEN -u SGLANG_SIMULATE_ACC_METHOD -u SGLANG_SIMULATE_ACC_TOKEN_MODE
   -u SGLANG_SIMULATE_UNIFORM_EXPERTS -u SGLANG_SIMULATE_ROUND_ROBIN_EXPERTS

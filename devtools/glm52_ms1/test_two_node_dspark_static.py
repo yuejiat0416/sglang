@@ -102,6 +102,12 @@ def test_two_node_script_is_direct_and_syntax_valid():
         "source /usr/local/Ascend/ascend-toolkit/set_env.sh"
     ) < text.index('export PYTHONPATH="$SGLANG_REPO/python${PYTHONPATH:+:$PYTHONPATH}"')
     assert "unset SGLANG_SIMULATE_UNIFORM_EXPERTS" in text
+    assert "export SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT=true" in text
+    assert (
+        "unset SGLANG_RAGGED_VERIFY_MODE "
+        "SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT"
+    ) in text
+    assert "SGLANG_NPU_GLM_DSPARK_QUAROT" not in text
     assert subprocess.run(["bash", "-n", str(SCRIPT)]).returncode == 0
     help_result = subprocess.run(
         ["bash", str(SCRIPT), "--help"], text=True, capture_output=True

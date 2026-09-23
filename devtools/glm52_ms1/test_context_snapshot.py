@@ -45,7 +45,7 @@ def runtime(tmp_path, monkeypatch, request):
     ).items():
         monkeypatch.setattr(obs, name, val)
     monkeypatch.setenv("SGLANG_RAGGED_VERIFY_MODE", "static")
-    monkeypatch.setenv("SGLANG_NPU_GLM_DSPARK_QUAROT", "original")
+    monkeypatch.setenv("SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT", "true")
     (tmp_path / "config.json").write_text("{}")
     config = {
         "run_dir": str(tmp_path),

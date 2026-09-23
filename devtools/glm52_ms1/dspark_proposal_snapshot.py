@@ -72,8 +72,8 @@ class Capture(ArrayCapture):
         require(a.disable_cuda_graph, "Eager only")
         require(os.environ.get("SGLANG_RAGGED_VERIFY_MODE") == "static", "Static only")
         require(
-            os.environ.get("SGLANG_NPU_GLM_DSPARK_QUAROT") == "original",
-            "Original mode only",
+            os.environ.get("SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT") == "true",
+            "QuaRot correction must be enabled",
         )
         require(
             type(self.worker.model_runner.model).__name__ == "GlmMoeDsaForCausalLM",

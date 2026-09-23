@@ -71,7 +71,7 @@ def prepare(state, scripts):
     )
     # Preserve the established diagnostic settings, explicitly for this launch.
     env.update(
-        SGLANG_NPU_GLM_DSPARK_QUAROT="original",
+        SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT="true",
         SGLANG_ENABLE_FAST_INPUT_LOGPROBS="0",
         SGLANG_DSPARK_DEBUG_DUMP="core,reqs",
         MODE="dspark",

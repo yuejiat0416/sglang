@@ -84,7 +84,7 @@ def launch_environment(
     ):
         raise ValueError("Use a plain terminal outside the snapshot observer launch")
     env.pop("SGLANG_DSPARK_DEBUG_DUMP", None)
-    env.pop("SGLANG_NPU_GLM_DSPARK_QUAROT", None)
+    env.pop("SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT", None)
     env.update(
         GLM52_LEGACY_LAUNCH="1",
         SGLANG_REPO=str(REPO),
@@ -103,7 +103,7 @@ def launch_environment(
     if draft is not None:
         env["DRAFT_MODEL"] = draft
     if mode.startswith("dspark"):
-        env["SGLANG_NPU_GLM_DSPARK_QUAROT"] = "original"
+        env["SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT"] = "true"
     return env
 
 
@@ -485,10 +485,12 @@ def main(argv=None):
     )
     script = HERE / "single_dspark_static.sh"
     if args.print_command:
-        print(f"QuaRot: {env.get('SGLANG_NPU_GLM_DSPARK_QUAROT', 'not set')}")
+        print(
+            f"QuaRot: {env.get('SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT', 'not set')}"
+        )
         return subprocess.call(["bash", str(script), "--print-command"], env=env)
     print(
-        f"Starting {args.mode}; TP16/DP1, metrics enabled, DSpark QuaRot={env.get('SGLANG_NPU_GLM_DSPARK_QUAROT', 'not set')}. Stop with Ctrl+C.",
+        f"Starting {args.mode}; TP16/DP1, metrics enabled, DSpark QuaRot={env.get('SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT', 'not set')}. Stop with Ctrl+C.",
         flush=True,
     )
     os.execvpe("bash", ["bash", str(script)], env)

@@ -32,7 +32,7 @@ REMOVED_ENV = (
     "SGLANG_DSPARK_DEBUG_DUMP",
     "GLM52_CONTEXT_SNAPSHOT_CONFIG",
     "GLM52_PROPOSAL_SNAPSHOT_CONFIG",
-    "SGLANG_NPU_GLM_DSPARK_QUAROT",
+    "SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT",
     "SGLANG_SIMULATE_ACC_LEN",
     "SGLANG_SIMULATE_ACC_METHOD",
     "SGLANG_SIMULATE_ACC_TOKEN_MODE",
@@ -71,7 +71,7 @@ def runtime_environment(cfg, rank, mode):
         "PYTHONUNBUFFERED": "1",
     }
     if mode.startswith("dspark-"):
-        values["SGLANG_NPU_GLM_DSPARK_QUAROT"] = "original"
+        values["SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT"] = "true"
     return values
 
 

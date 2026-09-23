@@ -128,9 +128,10 @@ export PYTHONPATH="$SGLANG_REPO/python${PYTHONPATH:+:$PYTHONPATH}"
 
 if [ "$MODE" = dspark ]; then
   export SGLANG_RAGGED_VERIFY_MODE=static
-  export SGLANG_NPU_GLM_DSPARK_QUAROT=original
+  # QuaRot target + unrotated draft: use draft-local vocab and fold Q into FC.
+  export SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT=true
 else
-  unset SGLANG_RAGGED_VERIFY_MODE SGLANG_NPU_GLM_DSPARK_QUAROT
+  unset SGLANG_RAGGED_VERIFY_MODE SGLANG_NPU_GLM_DSPARK_APPLY_QUAROT_TO_DRAFT
 fi
 
 # 将已审定的192维Python算子注册到当前测试容器；镜像内其余kernel依赖保持不变。
