@@ -1,5 +1,37 @@
 # GLM-5.2：从新机器到单双机启动、双机跑测与DeepEP预案
 
+## 当前单算子验证：取消 head_dim 的 2 次幂限制（2026-09-24）
+
+本轮验证 QKV 拆分、Q/K RMSNorm 与 RoPE 融合算子。负责人已确认取消原来“只允许 2 的幂或 192”的入口限制，统一使用实际 `head_dim` 作为块宽。正式候选为 kernel `4205c548dfc0662b6540dceb5ab54bc3590b47f4`，测试分支中的同内容提交为 `74f28595ab1dac9e0cea9a4964ddee369545d833`。已有证据是本机调度检查和工具测试通过；本轮补充 A3 编译、数值正确性和性能证据，尚未取得本轮 NPU 实测结果。
+
+覆盖范围已确认：`64、96、128、160、192、256、384`，每个维度复用原有 8 组 `(token 数, Q/KV 头数)`：`(1,1)、(8,2)、(33,4)、(8,8)、(1,16)、(8,32)、(1,64)、(0,4)`，分别使用 FP32/BF16 sin/cos cache。保留已有 GQA、bias、关闭 norm、partial/interleaved RoPE、dtype、连续视图和更换输入后的 graph replay 用例，不缩小输入、不放宽原有容差。预计共 **143 个精度用例**：142 个本次算子用例逐一做性能对照，另 1 个 Gemma 独立算子用例仅作兼容回归。
+
+在现有 **A3 测试容器**的新终端中执行，使用镜像自带 Python，不进入 EvalScope 虚拟环境。kernel 仓是 `/home/tyj/glm52/sgl-kernel-npu`，仍使用 `sync/glm52-dspark-ms1` 分支；逻辑 NPU **0** 已确认。这里不用启动 SGLang 服务或加载模型权重。
+
+```bash
+cd /home/tyj/glm52/sgl-kernel-npu
+git pull --ff-only origin sync/glm52-dspark-ms1
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+source /usr/local/Ascend/nnal/atb/set_env.sh
+python3 /home/tyj/glm52/sgl-kernel-npu/devtools/glm52_ms1/run_head192_tests.py --device 0 --benchmark
+```
+
+`git pull --ff-only` 只做可直接前进的更新；若提示本地修改或分支分叉，保留报错，不丢弃现场代码。`source` 让当前终端找到镜像中的昇腾运行库；`--device 0` 指定逻辑卡号，`--benchmark` 加入性能对照。文件名保留 `head192`，内容已经覆盖全部上述维度。不要把 kernel 源码目录加进 `PYTHONPATH`：工具先导入镜像已有的二进制依赖，再仅在本测试进程中加载候选 Python 算子，无需重新编译安装包或替换镜像文件。
+
+每个用例复用其最后一次真实算子调用的原始输入，比较新版算子、原生 PyTorch 和旧 PR 的 192 特判版本 `9bc1ac4`。工具从测试分支既有历史 `884908f` 取旧源码，并验证其 Git blob 与该 PR 完全相同，不需要额外克隆或手工准备旧版本。旧版只支持 64/128/192/256，因此 96/160/384 的旧版列记为 `UNSUPPORTED`，这三类仍完整测新版和 PyTorch。
+
+精度保留正式测试原有检查，并以 CPU FP32 PyTorch 计算为参考，对三种实现检查 Q/K 绝对误差和 V 原始字节。**PyTorch 性能在 NPU 上测量**，CPU 参考与数据搬回 CPU 不计时。每种实现分别测 eager 和 graph：预热 10 次、测 5 轮、每轮 30 次，保留 5 个每次平均耗时及其中位数。计量为两端同步的公共调用总耗时，包含主机发起调用的成本，不是纯 kernel 时间；编译和捕图不计入。实现按“新版、PyTorch、支持该维度的旧版”依次测量，疑似回退需要后续确认波动，不能只看单个比值下结论。
+
+终端会打印 `Evidence:` 后的完整结果目录，位于 `/home/tyj/glm52-ms1/evidence/head192-host-时间戳/`，其中：
+
+- `report.json`：版本、源码指纹、实际输入形状/dtype、精度结果、每轮耗时和比较比例。
+- `pytest.xml`：逐项精度结果；`traceback.txt` 仅在入口异常时生成。
+- `candidate_module.py`、`baseline_module.py`、`installed_module.py`：本轮对应源码。
+
+把该目录中的 `report.json` 和 `pytest.xml` 回传，失败时保留终端第一处异常。`PUBLIC_HOST_TESTS_PASS` 表示完整精度检查通过；`performance.status=MEASURED` 表示计时完整，不代表达到性能验收门槛。`torch_over_candidate > 1` 表示新版比原生 PyTorch 快，`candidate_over_baseline > 1` 表示新版比旧 PR 慢。跳过/筛掉用例、编译失败、数值失败或任何应测的 graph 失败，都不能算本轮完整通过；保留原参数定位原因。尚无约定的性能回退阈值，先报告逐项结果与波动，再决定是否需要优化。单算子通过不能替代整模型精度、接受率或部署兼容验证。
+
+源码学习入口：[kernel 公共函数](/Users/yuejiat/workspace/model-inference/worktrees/sgl-kernel-npu-glm52-dspark-upstream/python/sgl_kernel_npu/sgl_kernel_npu/norm/split_qkv_rmsnorm_rope.py:374)决定块宽并调用融合 kernel；[维度矩阵](/Users/yuejiat/workspace/model-inference/worktrees/sgl-kernel-npu-glm52-dspark-upstream/tests/python/sgl_kernel_npu/test_split_qkv_rmsnorm_rope_head192.py:11)保留原用例并扩展维度。它服务于 DSpark draft Transformer attention 前的 Q/K 处理；学习手册 [23.5 外部 kernel 调用路径](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4178)解释为何单独验证此仓，[23.7 Eager 和 Graph](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)解释两种模式为什么分别测。教材为概念快照，实际代码以本轮候选为准。
+
 ## 正式部署入口（2026-09-16）
 
 后续精度、性能和测试交付统一使用下面两个脚本；它们取代本文后面保留的历史启动配方：

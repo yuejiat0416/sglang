@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import shutil
@@ -45,14 +46,39 @@ def installed_package() -> Path:
     return Path(locations[0]).resolve()
 
 
+def has_native_head192_path(content: str) -> bool:
+    """Recognize the reviewed block-size assignments in the public host function."""
+    try:
+        module = ast.parse(content)
+    except SyntaxError:
+        return False
+    native_assignment = ast.dump(ast.parse("KV_BLOCK_SIZE = head_dim").body[0])
+    head192_condition = ast.dump(ast.parse("head_dim == 192", mode="eval").body)
+    for function in module.body:
+        if not (
+            isinstance(function, ast.FunctionDef)
+            and function.name == "split_qkv_rmsnorm_rope"
+        ):
+            continue
+        for statement in function.body:
+            if ast.dump(statement) == native_assignment:
+                return True
+            if (
+                isinstance(statement, ast.If)
+                and ast.dump(statement.test) == head192_condition
+                and any(ast.dump(item) == native_assignment for item in statement.body)
+            ):
+                return True
+    return False
+
+
 def register(kernel_repo: Path, package: Path | None = None) -> tuple[Path, bool]:
     source = (kernel_repo / KERNEL_FILE).resolve()
     if not source.is_file():
         raise RuntimeError(f"Kernel source does not exist: {source}")
 
     content = source.read_text(encoding="utf-8")
-    required = ("if head_dim == 192:", "KV_BLOCK_SIZE = head_dim")
-    if not all(marker in content for marker in required):
+    if not has_native_head192_path(content):
         raise RuntimeError(
             "Kernel checkout does not contain the reviewed native head_dim=192 path"
         )
