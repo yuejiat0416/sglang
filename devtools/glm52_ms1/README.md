@@ -1,5 +1,45 @@
 # GLM-5.2：从新机器到单双机启动、双机跑测与DeepEP预案
 
+## 2026-09-28：同步主仓，补齐 A5 target attention 路径
+
+本轮按负责人要求，将最新主仓合入 `feat/glm52-dspark-npu-upstream`，再同步到 `sync/glm52-dspark-ms1`。这是旧 sync 基线更新与接口兼容处理；A5 整模型验证仍需负责人在原环境执行。
+
+### 为什么旧 sync 没有，PR 分支却已有
+
+旧 sync `ccea7afb357cf42f72b885dd04e38891a5fd509f` 保留了 9 月 8 日的公共基线 `dfd9b5c2a4`，之后主要同步本项目功能，没有整体合入新主仓。PR #38860 的旧 HEAD `b448f591a96f58923e1aee81e80d938fa9e9130d` 已基于 9 月 10 日的 `dc2157dcd6`，包含主仓 A5 支持提交 `3ff226ba8f869cc83fdb68bd8bb2949f25ea58a0`（#38250）。所以“功能实现已同步”不等于“两边公共代码基线相同”；之前的同步没有覆盖到这层差异。
+
+本次故障已由日志和负责人回传源码确认：旧 sync 在 target verify 图预热中调用 `torch.ops.npu.batch_matmul_transpose`，当前 A5 进程没有注册这个算子。主仓已按 `_is_npu_arch35` 使用 `torch_npu.npu_transpose_batchmatmul`。该 target attention 文件不属于本项目 PR 的 15 个差异文件；这次完整沿用主仓内容，没有另做 A5 补丁。
+
+### 合并范围与兼容处理
+
+主仓固定快照：`f4de6abee64727d8b52bc732c589babb754df060`；合并后的 PR 提交为 `76969a6e4dbc05f0ee7302d08edf1bb0d9950c00`。完整合入其公共运行代码，因此本轮不只是追加一段 A5 判断。原 PR 的 Speculators 配置识别、QuaRot FC 转换、自有词表以及 anchor embedding 分派继续保留。
+
+唯一文本冲突位于 [DSparkWorkerV2 草稿构建](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-upstream/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py:178)。保留主仓的 PP/TP/DP 上下文与随机种子，再组合已有 QuaRot scope；不恢复被主仓移除的 `ps` 参数。四个正式测试同步适配拓扑初始化接口、`owns_attention=True` 和手工 attention 对象的 `v_scale=None`；所有测试输入、断言及 TP1/TP2/DP2 覆盖保持。
+
+sync 的两个临时观察工具改从 `worker.model_runner.tp_rank` 读取 rank，并调整对应 mock；proposal 工具的手工 attention 测试对象补 `v_scale=None`。除此之外的临时工具继续保留；它们不进入主仓 PR。部署脚本、kernel 仓、权重、TP16/DP4、并发16、block8/verify9、graph batch4、内存比例0.73及容量参数未修改。负责人服务器上的未跟踪脚本 `/home/tyj/glm52/sglang/devtools/glm52_ms1/a5_two_node.sh` 也不在本次提交中。
+
+源码与学习对应：target verify 预热的 [A5 算子选择](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-upstream/python/sglang/srt/hardware_backend/npu/modules/deepseek_v2_attention_mla_npu.py:537) 对应学习手册 [23.5 外部 kernel 调用路径](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4175)、[23.7 Eager 和 Graph](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)，用于区分算子注册、预热、捕图和回放。构造阶段的上下文组合对应 [第 7 章：缓存、并行与图执行](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:1818)；QuaRot 与自有词表对应 [32.12 三个配套接口](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:5832)。教材是概念和历史快照，当前代码以本轮提交为准。
+
+### 已验证与尚未验证
+
+- 15 个 PR 差异文件的 Python 语法、Ruff 检查/格式、diff 空白检查，以及正式测试注册和入口检查通过。
+- 两个临时观察工具在合并后运行源码上的现有测试：68 passed；没有安装依赖。
+- 正式八文件 CPU 回归已实际尝试，但在收集阶段因缺少 transformers、safetensors、orjson 等依赖中止，测试主体未执行。不能沿用旧 HEAD 的通过数字来代表本轮。
+- 本轮未运行 NPU、未验证 A3/A5 整模型功能、精度、接受率或性能。合并源码不等于整模型验收通过。
+
+### 负责人下一步：在原 A5 容器更新后原参数重试
+
+目的：确认原 `batch_matmul_transpose` 首错是否消失，再检查后续捕图和实际文本生成。两台机器都更新同一 sync 分支；在任意目录执行：
+
+```bash
+git -C /home/tyj/glm52/sglang pull --ff-only origin sync/glm52-dspark-ms1
+git -C /home/tyj/glm52/sglang rev-parse HEAD
+```
+
+第一条只接受可以直接前进的更新，第二条打印实际版本。随后沿用原启动目录、原 `/home/tyj/glm52/sglang/devtools/glm52_ms1/a5_two_node.sh` 和原参数启动；本轮不提供新的猜测启动命令。如果更新提示本地修改或分支分叉，保留报错。若原错误消失但有新首错，按新堆栈继续定位；若捕图成功，继续确认真实请求生成，再进入已有精度与性能验证。没有替负责人操作 NPU 服务器。
+
+完整版本、实际 diff 和审视记录见 [PR 交付记录](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/delivery/pr-preparation/README.md)。此前仅增加 10 行的 A5 候选没有应用，已由本轮完整同步方案取代；无需再核对同事环境。
+
 ## 当前单算子验证：取消 head_dim 的 2 次幂限制（2026-09-24）
 
 本轮验证 QKV 拆分、Q/K RMSNorm 与 RoPE 融合算子。负责人已确认取消原来“只允许 2 的幂或 192”的入口限制，统一使用实际 `head_dim` 作为块宽。正式候选为 kernel `4205c548dfc0662b6540dceb5ab54bc3590b47f4`，测试分支中的同内容提交为 `74f28595ab1dac9e0cea9a4964ddee369545d833`。已有证据是本机调度检查和工具测试通过；本轮补充 A3 编译、数值正确性和性能证据，尚未取得本轮 NPU 实测结果。

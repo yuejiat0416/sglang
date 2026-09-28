@@ -254,7 +254,6 @@ def runtime(tmp_path, monkeypatch, request):
             return output
 
     worker = DSparkWorkerV2()
-    worker.ps = NS(tp_rank=0)
     worker.server_args = NS(
         device="npu",
         speculative_algorithm="DSPARK",
@@ -268,7 +267,7 @@ def runtime(tmp_path, monkeypatch, request):
     )
     worker.draft_model = model
     worker._draft_is_moe = worker._target_hidden_projection_enabled = False
-    worker.model_runner = NS(model=type("GlmMoeDsaForCausalLM", (), {})())
+    worker.model_runner = NS(model=type("GlmMoeDsaForCausalLM", (), {})(), tp_rank=0)
     obs.install_worker(NS(DSparkWorkerV2=DSparkWorkerV2), config)
     return NS(
         root=tmp_path,
@@ -337,7 +336,7 @@ def test_real_boundaries_are_copied_once_and_replayed(runtime):
 def test_nonmatching_request_has_no_snapshot(runtime, change):
     r = runtime
     if change == "rank":
-        r.worker.ps.tp_rank = 1
+        r.worker.model_runner.tp_rank = 1
     else:
         r.batch.reqs[0].rid = "unrelated"
     assert r.worker._forward_prefill(r.batch) is r.output

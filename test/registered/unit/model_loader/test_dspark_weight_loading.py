@@ -29,9 +29,9 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 from sglang.srt.model_loader.loader import DefaultModelLoader
 from sglang.srt.model_loader.utils import set_default_torch_dtype
 from sglang.srt.models.dspark import DSparkDraftModel
-from sglang.srt.runtime_context import get_context
+from sglang.srt.runtime_context import get_context, reset_context
 from sglang.test.ci.ci_register import register_cpu_ci
-from sglang.test.test_utils import CustomTestCase
+from sglang.test.test_utils import CustomTestCase, publish_build_topology
 
 register_cpu_ci(est_time=12, suite="base-a-test-cpu")
 
@@ -112,7 +112,9 @@ class TestDSparkWeightLoading(CustomTestCase):
             distributed_init_method=f"file://{cls.group_dir.name}/gloo",
             backend="gloo",
         )
-        initialize_model_parallel(tensor_model_parallel_size=1, backend="gloo")
+        cls.addClassCleanup(reset_context)
+        publish_build_topology(tp_size=1, device="cpu")
+        initialize_model_parallel(backend="gloo")
 
     @classmethod
     def tearDownClass(cls):
@@ -227,9 +229,11 @@ class TestDSparkWeightLoading(CustomTestCase):
     def test_native_config_packed_weights_and_backbone_aliases(self):
         # Exercise the existing flat HF export, fused projections, backbone
         # model prefix, and encoder aliases through the production loader.
-        from sglang.srt.configs.speculators import normalize_speculators_dspark_config
+        from sglang.srt.configs.speculators import (
+            normalize_speculators_qwen3_dense_dspark_config,
+        )
 
-        self.config = normalize_speculators_dspark_config(self.config)
+        self.config = normalize_speculators_qwen3_dense_dspark_config(self.config)
         packed_expected = {}
         for index in range(5):
             for packed, sources in (

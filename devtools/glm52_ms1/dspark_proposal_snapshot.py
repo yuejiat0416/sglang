@@ -456,7 +456,7 @@ def install_worker(module, config):
     prefills = {}
 
     def matches(worker, batch):
-        return worker.ps.tp_rank == 0 and any(
+        return worker.model_runner.tp_rank == 0 and any(
             r.rid == config["rid"] for r in batch.reqs
         )
 

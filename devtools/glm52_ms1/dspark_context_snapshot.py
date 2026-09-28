@@ -516,7 +516,7 @@ def install_worker(module, config):
 
     @functools.wraps(original)
     def observed(worker, batch, *args, **kwargs):
-        if worker.ps.tp_rank != 0 or not any(
+        if worker.model_runner.tp_rank != 0 or not any(
             r.rid == config["rid"] for r in batch.reqs
         ):
             return original(worker, batch, *args, **kwargs)

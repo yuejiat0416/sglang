@@ -291,6 +291,7 @@ def runtime(tmp_path, monkeypatch, request):
             self.k_norm = RMSNorm(4)
             self.rotary_emb = RotaryEmbedding()
             self.attn = Radix()
+            self.v_scale = None
             self.attention_sink_bias = None
 
         def o_proj(self, value):
@@ -413,11 +414,10 @@ def runtime(tmp_path, monkeypatch, request):
     monkeypatch.setitem(sys.modules, obs.WORKER, worker_module)
     obs.install_worker(worker_module, config)
     worker = DSparkWorkerV2()
-    worker.ps = NS(tp_rank=0)
     worker.draft_model = model
     worker._draft_is_moe = False
     worker._proposer = proposer
-    worker.model_runner = NS(model=type("GlmMoeDsaForCausalLM", (), {})())
+    worker.model_runner = NS(model=type("GlmMoeDsaForCausalLM", (), {})(), tp_rank=0)
     worker.server_args = NS(
         device="npu",
         speculative_algorithm="DSPARK",
@@ -514,7 +514,7 @@ def test_unmatched_scope_never_observes(runtime, different):
     if different == "rid":
         r.batch.reqs[0].rid = "other"
     else:
-        r.worker.ps.tp_rank = 3
+        r.worker.model_runner.tp_rank = 3
     r.worker._forward_prefill(r.batch)
     assert r.worker._forward_decode(r.batch) is r.output
     assert not (r.root / "snapshot.json").exists()
