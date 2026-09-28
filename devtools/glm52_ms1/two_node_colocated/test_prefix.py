@@ -472,6 +472,7 @@ class AsyncScenarioTests(unittest.TestCase):
             "RequestFuncInput",
             "RequestFuncOutput",
             "async_request_sglang_generate",
+            "_record_server_prompt_len",
             "BenchmarkMetrics",
             "calculate_metrics",
         }

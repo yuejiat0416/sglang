@@ -16,7 +16,7 @@
 
 唯一文本冲突位于 [DSparkWorkerV2 草稿构建](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-upstream/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py:178)。保留主仓的 PP/TP/DP 上下文与随机种子，再组合已有 QuaRot scope；不恢复被主仓移除的 `ps` 参数。四个正式测试同步适配拓扑初始化接口、`owns_attention=True` 和手工 attention 对象的 `v_scale=None`；所有测试输入、断言及 TP1/TP2/DP2 覆盖保持。
 
-sync 的两个临时观察工具改从 `worker.model_runner.tp_rank` 读取 rank，并调整对应 mock；proposal 工具的手工 attention 测试对象补 `v_scale=None`。除此之外的临时工具继续保留；它们不进入主仓 PR。部署脚本、kernel 仓、权重、TP16/DP4、并发16、block8/verify9、graph batch4、内存比例0.73及容量参数未修改。负责人服务器上的未跟踪脚本 `/home/tyj/glm52/sglang/devtools/glm52_ms1/a5_two_node.sh` 也不在本次提交中。
+sync 的两个临时观察工具改从 `worker.model_runner.tp_rank` 读取 rank，并调整对应 mock；proposal 工具的手工 attention 测试对象补 `v_scale=None`。三个临时 benchmark 测试也补齐提取主仓新增的 `_record_server_prompt_len` 辅助函数，原输入和断言保持。除此之外的临时工具继续保留；它们不进入主仓 PR。部署脚本、kernel 仓、权重、TP16/DP4、并发16、block8/verify9、graph batch4、内存比例0.73及容量参数未修改。负责人服务器上的未跟踪脚本 `/home/tyj/glm52/sglang/devtools/glm52_ms1/a5_two_node.sh` 也不在本次提交中。
 
 源码与学习对应：target verify 预热的 [A5 算子选择](/Users/yuejiat/workspace/model-inference/worktrees/sglang-glm52-dspark-upstream/python/sglang/srt/hardware_backend/npu/modules/deepseek_v2_attention_mla_npu.py:537) 对应学习手册 [23.5 外部 kernel 调用路径](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4175)、[23.7 Eager 和 Graph](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:4197)，用于区分算子注册、预热、捕图和回放。构造阶段的上下文组合对应 [第 7 章：缓存、并行与图执行](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:1818)；QuaRot 与自有词表对应 [32.12 三个配套接口](/Users/yuejiat/workspace/model-inference/glm52-dspark-npu-project/learning/glm52-dspark-complete-guide.md:5832)。教材是概念和历史快照，当前代码以本轮提交为准。
 
@@ -24,6 +24,7 @@ sync 的两个临时观察工具改从 `worker.model_runner.tp_rank` 读取 rank
 
 - 15 个 PR 差异文件的 Python 语法、Ruff 检查/格式、diff 空白检查，以及正式测试注册和入口检查通过。
 - 两个临时观察工具在合并后运行源码上的现有测试：68 passed；没有安装依赖。
+- 全部临时工具测试在适配后重跑：681 passed、4 failed。四项失败分别是两个 HTTP 用例缺 aiohttp、两个 `python -I` 隔离进程找不到 NumPy；没有删除或跳过用例，不将整套测试报告为通过。
 - 正式八文件 CPU 回归已实际尝试，但在收集阶段因缺少 transformers、safetensors、orjson 等依赖中止，测试主体未执行。不能沿用旧 HEAD 的通过数字来代表本轮。
 - 本轮未运行 NPU、未验证 A3/A5 整模型功能、精度、接受率或性能。合并源码不等于整模型验收通过。
 

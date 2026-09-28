@@ -236,11 +236,17 @@ def test_real_native_request_and_capture(tmp_path):
     from aiohttp import web
 
     source = ast.parse((runner.REPO / "python/sglang/benchmark/serving.py").read_text())
-    names = {"RequestFuncInput", "RequestFuncOutput", "async_request_sglang_generate"}
+    names = {
+        "RequestFuncInput",
+        "RequestFuncOutput",
+        "async_request_sglang_generate",
+        "_record_server_prompt_len",
+    }
     selected = [
         node
         for node in source.body
-        if isinstance(node, (ast.ClassDef, ast.AsyncFunctionDef)) and node.name in names
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in names
     ]
     scope = dict(
         Any=Any,

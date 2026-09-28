@@ -197,6 +197,7 @@ def load_actual_request_function():
         "RequestFuncOutput",
         "async_request_openai_chat_completions",
         "_combine_openai_chat_content",
+        "_record_server_prompt_len",
     }
     source = ast.parse((runner.REPO / "python/sglang/benchmark/serving.py").read_text())
     selected = [
