@@ -36,7 +36,11 @@ from sglang.srt.runtime_context import (
     get_schedule,
 )
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
-from sglang.srt.utils.common import require_mlp_tp_gather
+from sglang.srt.utils.common import (
+    _glm52_gloo_trace_begin,
+    _glm52_gloo_trace_end,
+    require_mlp_tp_gather,
+)
 
 if TYPE_CHECKING:
     from sglang.srt.model_executor.model_runner import ModelRunner
@@ -181,11 +185,18 @@ class MLPSyncBatchInfo:
             missing = flat_info.abs().sum(dim=1) == 0
             flat_info[missing] = fallback_tensor
         else:
+            trace = _glm52_gloo_trace_begin(
+                "all_gather_single",
+                local_info_tensor,
+                group,
+                output=global_info_tensor,
+            )
             all_gather_single(
                 global_info_tensor.flatten(),
                 local_info_tensor,
                 group=group,
             )
+            _glm52_gloo_trace_end(trace)
 
         tp_info = global_info_tensor.view(
             self.dp_size * self.tp_size * self.cp_size, info_width

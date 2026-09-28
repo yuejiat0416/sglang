@@ -2523,6 +2523,78 @@ def set_weight_attrs(
         setattr(weight, key, value)
 
 
+# Temporary sync-only diagnostics. Keep this out of the community PR.
+_GLM52_GLOO_TRACE_ENABLED = os.environ.get("SGLANG_GLM52_GLOO_TRACE") == "1"
+_GLM52_GLOO_TRACE_COUNTS = defaultdict(itertools.count)
+_GLM52_GLOO_TRACE_FAILURE_REPORTED = False
+
+
+def _glm52_gloo_trace_begin(op, tensor, group, *, src=None, output=None):
+    global _GLM52_GLOO_TRACE_FAILURE_REPORTED
+    if not _GLM52_GLOO_TRACE_ENABLED:
+        return None
+
+    try:
+        if tensor.device.type != "cpu":
+            return None
+        group = dist.group.WORLD if group is None else group
+        if dist.get_backend(group) != "gloo":
+            return None
+        index = next(_GLM52_GLOO_TRACE_COUNTS[group])
+        if index >= 64:
+            return None
+
+        frame = sys._getframe(1)
+        caller = frame.f_back
+        record = {
+            "pid": os.getpid(),
+            "rank": dist.get_rank(),
+            "group_rank": dist.get_rank(group),
+            "group": group.group_name,
+            "group_ranks": dist.get_process_group_ranks(group),
+            "seq": group._get_sequence_number_for_group(),
+            "call": index + 1,
+            "op": op,
+            "src": src,
+            "shape": list(tensor.shape),
+            "dtype": str(tensor.dtype),
+            "device": str(tensor.device),
+            "nbytes": tensor.numel() * tensor.element_size(),
+            "site": f"{frame.f_code.co_filename}:{frame.f_lineno}",
+            "caller": (
+                f"{caller.f_code.co_filename}:{caller.f_lineno}" if caller else None
+            ),
+        }
+        if output is not None:
+            record["output_shape"] = list(output.shape)
+            record["output_nbytes"] = output.numel() * output.element_size()
+        logger.warning(
+            "[GLM52_GLOO_TRACE] begin %s", json.dumps(record, sort_keys=True)
+        )
+        return record
+    except Exception as exc:
+        # Diagnostic metadata must not replace the original collective/error.
+        if not _GLM52_GLOO_TRACE_FAILURE_REPORTED:
+            _GLM52_GLOO_TRACE_FAILURE_REPORTED = True
+            try:
+                logger.warning(
+                    "[GLM52_GLOO_TRACE] metadata unavailable: %s", type(exc).__name__
+                )
+            except Exception:
+                pass
+        return None
+
+
+def _glm52_gloo_trace_end(record):
+    if record is not None:
+        try:
+            logger.warning(
+                "[GLM52_GLOO_TRACE] end %s", json.dumps(record, sort_keys=True)
+            )
+        except Exception:
+            pass
+
+
 def broadcast_pyobj(
     data: List[Any],
     rank: int,
@@ -2545,7 +2617,11 @@ def broadcast_pyobj(
     if rank == src:
         if len(data) == 0:
             tensor_size = torch.tensor([0], dtype=torch.long, device=device)
+            trace = _glm52_gloo_trace_begin(
+                "broadcast.header", tensor_size, dist_group, src=src
+            )
             dist.broadcast(tensor_size, src=src, group=dist_group)
+            _glm52_gloo_trace_end(trace)
         else:
             serialized_data = pickle.dumps(data)
             size = len(serialized_data)
@@ -2555,19 +2631,35 @@ def broadcast_pyobj(
             ).to(device)
             tensor_size = torch.tensor([size], dtype=torch.long, device=device)
 
+            trace = _glm52_gloo_trace_begin(
+                "broadcast.header", tensor_size, dist_group, src=src
+            )
             dist.broadcast(tensor_size, src=src, group=dist_group)
+            _glm52_gloo_trace_end(trace)
+            trace = _glm52_gloo_trace_begin(
+                "broadcast.payload", tensor_data, dist_group, src=src
+            )
             dist.broadcast(tensor_data, src=src, group=dist_group)
+            _glm52_gloo_trace_end(trace)
         return data
     else:
         tensor_size = torch.tensor([0], dtype=torch.long, device=device)
+        trace = _glm52_gloo_trace_begin(
+            "broadcast.header", tensor_size, dist_group, src=src
+        )
         dist.broadcast(tensor_size, src=src, group=dist_group)
+        _glm52_gloo_trace_end(trace)
         size = tensor_size.item()
 
         if size == 0:
             return []
 
         tensor_data = torch.empty(size, dtype=torch.uint8, device=device)
+        trace = _glm52_gloo_trace_begin(
+            "broadcast.payload", tensor_data, dist_group, src=src
+        )
         dist.broadcast(tensor_data, src=src, group=dist_group)
+        _glm52_gloo_trace_end(trace)
 
         serialized_data = bytes(tensor_data.cpu().numpy())
         data = pickle.loads(serialized_data)

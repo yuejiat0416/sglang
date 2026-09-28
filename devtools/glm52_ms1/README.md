@@ -1,5 +1,48 @@
 # GLM-5.2：从新机器到单双机启动、双机跑测与DeepEP预案
 
+## 2026-09-28：A5 Gloo 32/8 字节异常的临时日志（仅 sync）
+
+本轮在负责人明确同意后，仅给 sync 的 `broadcast_pyobj` 和调度元信息 `all_gather` 增加临时记录。基线为 `3cad1040da55331ecd7106483f5303c994a190bd`。两台代码、完整启动脚本（除 NODE_RANK）、已查通信变量与 PyTorch 版本一致，但现有首错缺少失败 rank、通信组及操作序号，因此补这些运行证据；当前还没有故障修复结论。
+
+只修改 `python/sglang/srt/utils/common.py` 和 `python/sglang/srt/managers/scheduler_components/dp_attn.py`，以及本操作说明。诊断不进入主仓 PR，不更新 main、不修改 kernel 或已安装依赖。日志默认关闭；用 `SGLANG_GLM52_GLOO_TRACE=1` 在本次启动开启。仅记录 CPU/Gloo 的原调用，不增加 barrier、通信组或 collective，不读取提示词或张量内容。每进程每组前 64 次被观察调用各打印 begin/end，header 和 payload 各计一次；超过上限不再记录，不能保证异常一定落在记录窗口内。日志开销可能扰动时序，本轮不能作为性能测试。
+
+### 两台当前 B060 容器中更新代码
+
+确认上一轮服务已经退出后，在两台容器分别执行：
+
+```bash
+git -C /home/tyj/glm52/sglang pull --ff-only origin sync/glm52-dspark-ms1
+git -C /home/tyj/glm52/sglang rev-parse HEAD
+```
+
+两台 HEAD 应相同。若 Git 报本地修改或分叉，保留报错，不丢弃文件。用户当前的 `/home/tyj/glm52/sglang/devtools/glm52_ms1/a5_two_node.sh` 是未跟踪的本地脚本，本次没有添加同名跟踪文件或修改它。
+
+### 沿用原脚本，分别保存完整日志
+
+node 0 的服务容器终端运行：
+
+```bash
+SGLANG_GLM52_GLOO_TRACE=1 bash /home/tyj/glm52/sglang/devtools/glm52_ms1/a5_two_node.sh 2>&1 | tee /home/tyj/glm52/sglang/a5_gloo_node0.log
+```
+
+node 1 的服务容器终端运行：
+
+```bash
+SGLANG_GLM52_GLOO_TRACE=1 bash /home/tyj/glm52/sglang/devtools/glm52_ms1/a5_two_node.sh 2>&1 | tee /home/tyj/glm52/sglang/a5_gloo_node1.log
+```
+
+前面的 `变量=1` 只对这条启动命令生效，不会永久修改终端配置。`2>&1 | tee` 同时显示并保存程序输出；它不是服务成功的判断依据。保留两份日志供回传，不只截最后的连接关闭错误。上述固定日志文件会被本次命令覆盖，如果已保存过一轮，先回传旧日志再重跑。
+
+继续保留当前两机 TP16/DP4、DP attention/LM head、static、graph batch4、block8/verify9、context/max-total133120、chunked-prefill16384、max-prefill131072、max-running16、mem-fraction0.78、原 target ModelSlim INT8/draft unquant、QuaRot=true、DeepEP auto。本轮不关闭 DP attention：现有双机 DP4 不开启它会被参数校验拒绝，DP LM head 也依赖它；非 DP attention 仍有 Gloo 请求广播，不能保证关闭就消除本次故障。
+
+### 日志判读与验证边界
+
+查找 `[GLM52_GLOO_TRACE]`：`rank` 是全局 rank，`group_rank` 是组内 rank，`group`/`group_ranks` 是原通信组及成员；`seq` 是开始调用前读取的 Gloo 本地通信序号，不是新增通信；`call` 是本探针的组内计数，两者不要混用。`op` 区分 broadcast.header、broadcast.payload、all_gather_single；shape/dtype/nbytes 是输入元信息，src 是广播的全局源 rank。all-gather 的 output_shape 是输出缓冲逻辑形状，实际原调用仍传其 flatten()；output_nbytes 是完整输出缓冲字节数。site/caller 标记调用位置。
+
+begin/end 共用开始时的 seq 便于配对；只有 begin 没有 end，表示该调用尚未正常返回或进程已终止，不能仅据此认定它就是根因。若不同 rank 的组成员、同一通信序号的操作或张量大小不同，按差异定位调用来源；若均一致但仍报错，再查更底层证据。若打印 metadata unavailable，说明诊断元信息读取失败，原通信仍会执行，不把“没有详细日志”当成无错误。若不再复现或错误在前 64 次之后发生，不宣称故障已修复。
+
+本地已检查原代码 AST 保持、语法与格式、白空格；针对性调用记录检查涵盖关闭/开启、限额、元信息读取失败及原异常传播。common.py 的 6 个旧 lint 问题与基线相同，没有为本轮扩大修改范围。尚未执行 NPU、真实双机 Gloo、生成、精度或性能验证。定位结束后回到原启动命令（不加 `SGLANG_GLM52_GLOO_TRACE=1`）即可关闭日志；诊断代码始终排除正式 PR。
+
 ## 2026-09-28：同步主仓，补齐 A5 target attention 路径
 
 本轮按负责人要求，将最新主仓合入 `feat/glm52-dspark-npu-upstream`，再同步到 `sync/glm52-dspark-ms1`。这是旧 sync 基线更新与接口兼容处理；A5 整模型验证仍需负责人在原环境执行。
